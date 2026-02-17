@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -177,6 +178,47 @@ func (h *DeviceHandler) Delete(c *gin.Context) {
 	}
 
 	Success(c, nil)
+}
+
+// History 获取设备历史遥测数据
+func (h *DeviceHandler) History(c *gin.Context) {
+	ctx, err := h.withRLS(c)
+	if err != nil {
+		Fail(c, http.StatusInternalServerError, "database error")
+		return
+	}
+	defer database.ReleaseRLSConn(ctx)
+
+	id := c.Param("id")
+	if _, err = h.repo.GetByID(ctx, id); err != nil {
+		Fail(c, http.StatusNotFound, "device not found")
+		return
+	}
+
+	end := time.Now()
+	start := end.Add(-1 * time.Hour)
+	if s := c.Query("start"); s != "" {
+		if t, err := time.Parse(time.RFC3339, s); err == nil {
+			start = t
+		}
+	}
+	if e := c.Query("end"); e != "" {
+		if t, err := time.Parse(time.RFC3339, e); err == nil {
+			end = t
+		}
+	}
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "200"))
+	if limit < 1 || limit > 1000 {
+		limit = 200
+	}
+
+	data, err := h.dataRepo.GetDataHistory(ctx, id, start, end, limit)
+	if err != nil {
+		logger.Log.Errorf("Failed to get history data for device %s: %v", id, err)
+		Fail(c, http.StatusInternalServerError, "failed to get history data")
+		return
+	}
+	Success(c, data)
 }
 
 // LatestData 获取设备最新遥测数据

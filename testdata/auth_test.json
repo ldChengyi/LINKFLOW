@@ -1,0 +1,23 @@
+{
+  "accounts": {
+    "valid_user":     { "email": "testuser@linkflow.dev",  "password": "Test@12345" },
+    "duplicate_user": { "email": "duplicate@linkflow.dev", "password": "Dup@12345" },
+    "login_user":     { "email": "loginuser@linkflow.dev", "password": "Login@12345" },
+    "logout_user":    { "email": "logoutuser@linkflow.dev","password": "Logout@12345" }
+  },
+  "invalid_cases": {
+    "wrong_password":    { "email": "loginuser@linkflow.dev", "password": "WrongPassword" },
+    "nonexistent_user":  { "email": "nobody@linkflow.dev",    "password": "NoOne@12345" }
+  },
+  "integration": {
+    "database": {
+      "host": "localhost",
+      "port": "5432",
+      "name": "linkflow",
+      "admin_user": "linkflow_admin",
+      "admin_password": "linkflow_admin"
+    },
+    "redis": { "addr": "localhost:6379", "password": "", "db": 1 },
+    "jwt":   { "secret": "test-jwt-secret-key", "expire_hours": 1 }
+  }
+}

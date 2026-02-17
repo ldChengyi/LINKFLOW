@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
-  LayoutDashboard, Box, Cpu, Activity, Blocks, ScrollText, LogOut, Menu, X, ChevronDown, Leaf, User, Bell, AlertTriangle,
+  LayoutDashboard, Box, Cpu, Activity, Blocks, ScrollText, LogOut, Menu, X, ChevronDown, Leaf, User, Bell, AlertTriangle, Clock, Palette,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { authApi, statsApi } from '../api';
@@ -12,6 +12,7 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { useWebSocket } from '../hooks/useWebSocket';
+import { useTheme } from '../hooks/useTheme';
 import type { WSMessage } from '../hooks/useWebSocket';
 import ThingModelList from './ThingModelList';
 import ThingModelForm from './ThingModelForm';
@@ -23,6 +24,8 @@ import AuditLogList from './AuditLogList';
 import AlertRuleList from './AlertRuleList';
 import AlertRuleForm from './AlertRuleForm';
 import AlertLogList from './AlertLogList';
+import ScheduledTaskList from './ScheduledTaskList';
+import ScheduledTaskForm from './ScheduledTaskForm';
 
 interface UserInfo {
   user_id: string;
@@ -36,6 +39,7 @@ const navItems = [
   { key: 'device-data', label: '设备数据', icon: Activity, path: '/device-data' },
   { key: 'alert-rules', label: '告警规则', icon: Bell, path: '/alert-rules' },
   { key: 'alert-logs', label: '告警历史', icon: AlertTriangle, path: '/alert-logs' },
+  { key: 'scheduled-tasks', label: '定时任务', icon: Clock, path: '/scheduled-tasks' },
   { key: 'modules', label: '功能模块', icon: Blocks, path: '/modules' },
   { key: 'audit-logs', label: '审计日志', icon: ScrollText, path: '/audit-logs' },
 ];
@@ -86,6 +90,7 @@ export default function Dashboard() {
   const [user, setUser] = useState<UserInfo | null>(null);
   const [collapsed, setCollapsed] = useState(false);
   const [stats, setStats] = useState<StatsOverview | null>(null);
+  const { theme, setTheme } = useTheme();
 
   useEffect(() => {
     fetchUser();
@@ -155,6 +160,7 @@ export default function Dashboard() {
     if (path.startsWith('/audit-logs')) return 'audit-logs';
     if (path.startsWith('/alert-rules')) return 'alert-rules';
     if (path.startsWith('/alert-logs')) return 'alert-logs';
+    if (path.startsWith('/scheduled-tasks')) return 'scheduled-tasks';
     return 'dashboard';
   };
 
@@ -209,7 +215,26 @@ export default function Dashboard() {
             {collapsed ? <Menu className="h-5 w-5" /> : <X className="h-5 w-5" />}
           </Button>
 
-          <DropdownMenu>
+          <div className="flex items-center gap-2">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon" title="切换主题">
+                  <Palette className="h-5 w-5" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => setTheme('green')} className={theme === 'green' ? 'text-primary' : ''}>
+                  <span className="inline-block w-3 h-3 rounded-full bg-[#22c55e] mr-2" />
+                  翠绿主题
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setTheme('blue')} className={theme === 'blue' ? 'text-primary' : ''}>
+                  <span className="inline-block w-3 h-3 rounded-full bg-[#38bdf8] mr-2" />
+                  天蓝主题
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+
+            <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button className="flex items-center gap-2 px-3 py-1.5 rounded-lg hover:bg-accent transition-colors cursor-pointer">
                 <div className="h-8 w-8 rounded-full bg-primary/20 flex items-center justify-center">
@@ -225,7 +250,8 @@ export default function Dashboard() {
                 退出登录
               </DropdownMenuItem>
             </DropdownMenuContent>
-          </DropdownMenu>
+            </DropdownMenu>
+          </div>
         </header>
 
         <main className="flex-1 overflow-auto p-6">
@@ -246,6 +272,9 @@ export default function Dashboard() {
             <Route path="/alert-rules/new" element={<AlertRuleForm />} />
             <Route path="/alert-rules/:id/edit" element={<AlertRuleForm />} />
             <Route path="/alert-logs" element={<AlertLogList />} />
+            <Route path="/scheduled-tasks" element={<ScheduledTaskList />} />
+            <Route path="/scheduled-tasks/new" element={<ScheduledTaskForm />} />
+            <Route path="/scheduled-tasks/:id/edit" element={<ScheduledTaskForm />} />
           </Routes>
         </main>
       </div>

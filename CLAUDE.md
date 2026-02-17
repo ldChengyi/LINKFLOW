@@ -81,7 +81,8 @@ linkflow/
 │   │   ├── stats.go                # 仪表盘统计处理器
 │   │   ├── ws.go                   # WebSocket 升级处理器
 │   │   ├── alert_rule.go           # 告警规则 CRUD 处理器
-│   │   └── alert_log.go            # 告警日志查询处理器
+│   │   ├── alert_log.go            # 告警日志查询处理器
+│   │   └── scheduled_task.go       # 定时任务 CRUD 处理器
 │   ├── logger/logger.go            # zap 日志封装
 │   ├── middleware/auth.go          # JWT 认证中间件
 │   ├── mqtt/
@@ -90,6 +91,8 @@ linkflow/
 │   │   ├── hooks.go                # 连接管理 + 消息处理 + 告警评估
 │   │   ├── validator.go            # 物模型属性校验器
 │   │   └── voice.go                # 语音指令处理器（本地 NLP）
+│   ├── scheduler/
+│   │   └── scheduler.go            # 定时任务调度引擎（Cron 评估 + MQTT 下发）
 │   ├── ws/
 │   │   └── hub.go                  # WebSocket Hub + Client 管理
 │   ├── model/
@@ -97,7 +100,8 @@ linkflow/
 │   │   ├── thing_model.go          # 物模型（属性/事件/服务/模块）
 │   │   ├── device.go               # 设备模型
 │   │   ├── module.go               # 功能模块模型 + 语音指令结构
-│   │   └── alert.go                # 告警规则 + 告警日志模型
+│   │   ├── alert.go                # 告警规则 + 告警日志模型
+│   │   └── scheduled_task.go       # 定时任务模型
 │   ├── repository/
 │   │   ├── user.go                 # 用户数据访问
 │   │   ├── thing_model.go          # 物模型数据访问
@@ -105,23 +109,30 @@ linkflow/
 │   │   ├── device_data.go          # 遥测数据存储 + 查询
 │   │   ├── module.go               # 功能模块数据访问
 │   │   ├── alert_rule.go           # 告警规则数据访问
-│   │   └── alert_log.go            # 告警日志数据访问
-│   └── service/
-│       ├── auth.go                 # 认证业务逻辑
-│       └── jwt.go                  # JWT + Redis 校验
+│   │   ├── alert_log.go            # 告警日志数据访问
+│   │   └── scheduled_task.go       # 定时任务数据访问
+│   ├── service/
+│   │   ├── auth.go                 # 认证业务逻辑
+│   │   ├── jwt.go                  # JWT + Redis 校验
+│   │   ├── interfaces.go           # 可 mock 接口（UserRepo/TokenStore/TokenGenerator）
+│   │   └── mock/                   # mockgen 生成的 mock
+│   └── testutil/
+│       └── config.go               # 测试配置加载工具
 ├── migrations/
 │   ├── 001_init_roles.sql          # 角色 + 扩展初始化
 │   ├── 002_users_table.sql         # 用户表
 │   ├── 003_devices_table_rls.sql   # 设备表 + RLS 策略
 │   ├── 004_device_data_hypertable.sql # 遥测数据时序表
 │   ├── 005_modules.sql             # 功能模块表 + 物模型 modules 字段
-│   └── 007_alert_system.sql        # 告警规则表 + 告警日志表 + RLS
+│   ├── 007_alert_system.sql        # 告警规则表 + 告警日志表 + RLS
+│   └── 008_scheduled_tasks.sql     # 定时任务表 + RLS
 ├── web/                             # 前端项目
 │   ├── src/
 │   │   ├── api/index.ts            # Axios API 客户端
 │   │   ├── components/ui/          # shadcn/ui 组件
 │   │   ├── hooks/
-│   │   │   └── useWebSocket.ts     # WebSocket hook（连接/重连/消息分发）
+│   │   │   ├── useWebSocket.ts     # WebSocket hook（连接/重连/消息分发）
+│   │   │   └── useTheme.ts         # 主题切换 hook（localStorage 持久化）
 │   │   ├── pages/
 │   │   │   ├── Login.tsx           # 登录/注册页
 │   │   │   ├── Dashboard.tsx       # 仪表盘（侧边栏 + WS连接 + 全局事件总线）
@@ -129,11 +140,13 @@ linkflow/
 │   │   │   ├── ThingModelForm.tsx  # 物模型创建/编辑（含模块配置）
 │   │   │   ├── DeviceList.tsx      # 设备列表（实时状态更新）
 │   │   │   ├── DeviceForm.tsx      # 设备创建/编辑
-│   │   │   ├── DeviceData.tsx      # 设备数据查看（实时遥测更新）
+│   │   │   ├── DeviceData.tsx      # 设备数据查看（实时遥测 + 历史趋势图表）
 │   │   │   ├── ModuleList.tsx      # 功能模块列表
 │   │   │   ├── AlertRuleList.tsx   # 告警规则管理
 │   │   │   ├── AlertRuleForm.tsx   # 告警规则创建/编辑
-│   │   │   └── AlertLogList.tsx    # 告警历史（实时新告警推送）
+│   │   │   ├── AlertLogList.tsx    # 告警历史（实时新告警推送）
+│   │   │   ├── ScheduledTaskList.tsx # 定时任务列表
+│   │   │   └── ScheduledTaskForm.tsx # 定时任务创建/编辑
 │   │   ├── App.tsx                 # 路由配置
 │   │   └── main.tsx                # 入口文件
 │   ├── Dockerfile                   # 前端镜像（Nginx）
@@ -142,6 +155,14 @@ linkflow/
 ├── scripts/
 │   ├── init-db.sh                   # 数据库初始化入口
 │   └── init-db.sql.template         # SQL 模板（支持环境变量）
+├── tests/                            # 统一测试包
+│   ├── setup_test.go                # 测试配置加载（所有测试共享）
+│   ├── setup_integration_test.go    # 集成测试 PG/Redis 初始化（integration tag）
+│   ├── auth_test.go                 # 认证单元测试
+│   ├── jwt_test.go                  # JWT 单元测试
+│   └── auth_integration_test.go     # 认证集成测试（integration tag）
+├── testdata/
+│   └── auth_test.json               # 测试账号配置
 ├── .env                              # 环境配置（不提交）
 ├── .env.example                      # 配置模板
 ├── docker-compose.yml                # 一键部署
@@ -174,9 +195,10 @@ linkflow/
 
 4. **Web 前端**
    - React 18 + TypeScript + shadcn/ui
-   - 登录/注册页面（深色主题）
-   - 仪表盘（可折叠侧边栏 + 顶部用户菜单）
-   - 导航：仪表盘 / 物模型 / 设备管理 / 设备数据 / 功能模块 / 告警规则 / 告警历史
+   - 登录/注册页面（内联表单验证 + 错误/成功反馈）
+   - 多主题支持（翠绿深色 / 天蓝浅色），CSS 变量 + `data-theme` 切换
+   - 仪表盘（可折叠侧边栏 + 顶部用户菜单 + 主题切换）
+   - 导航：仪表盘 / 物模型 / 设备管理 / 设备数据 / 功能模块 / 告警规则 / 告警历史 / 定时任务
    - Nginx 反向代理（80 端口）
    - `/api/*` 请求转发至后端
 
@@ -251,6 +273,38 @@ linkflow/
     - 前端：规则管理页（CRUD）+ 告警历史页（实时新告警插入）
     - 设备筛选：规则列表和告警历史均支持按设备筛选（下拉选择设备或查看全部）
 
+14. **数据可视化（历史趋势图表）**
+    - 后端 API：`GET /api/devices/:id/data/history?start=&end=&limit=`
+    - TimescaleDB 时间范围查询，返回 time + payload + valid
+    - 前端 recharts LineChart，支持 1h/6h/24h/7d 时间范围切换
+    - 自动提取数值型属性（int/float）绘制多条折线
+
+15. **定时任务系统**
+    - Cron 表达式驱动，支持属性设置（property_set）和服务调用（service_invoke）
+    - Scheduler 引擎：goroutine 每分钟 tick，评估 cron 表达式，通过 MQTT Publish 下发
+    - 任务 CRUD + RLS 行级安全
+    - 前端：任务列表（按设备筛选）+ 创建/编辑表单（Cron 预设 + 物模型属性/服务选择）
+    - 内置 scheduler 功能模块，可在物模型中启用
+
+### 第四阶段：质量保障 ✅
+
+16. **测试体系**
+    - Service 层接口抽象（UserRepo / TokenStore / TokenGenerator）支持 mock
+    - mockgen 生成 mock，单元测试覆盖认证 + JWT 逻辑
+    - 集成测试连接真实 PG + Redis，覆盖注册/登录/登出 + 全部 API 端点
+    - JSON 配置文件（`testdata/auth_test.json`）管理测试账号和连接信息
+    - `go test ./tests/ -v`（单元测试）/ `go test -tags integration ./tests/ -v`（集成测试）
+
+17. **多主题系统**
+    - CSS 变量主题：翠绿深色（默认）+ 天蓝浅色（`[data-theme="blue"]`）
+    - `useTheme` hook + localStorage 持久化 + 顶部 Palette 按钮切换
+    - 登录页 / 仪表盘 / Toast 通知均跟随主题
+
+18. **登录反馈增强**
+    - 内联错误/成功消息（表单内 banner，替代纯 toast）
+    - 输入框字段级错误高亮（红色边框 + 图标）
+    - 输入时自动清除错误状态，Tab 切换清除所有提示
+
 ------
 
 ## API 端点
@@ -282,7 +336,13 @@ linkflow/
 | GET    | /api/alert-rules/:id        | 告警规则详情       | 是   |
 | PUT    | /api/alert-rules/:id        | 更新告警规则       | 是   |
 | DELETE | /api/alert-rules/:id        | 删除告警规则       | 是   |
+| GET    | /api/devices/:id/data/history | 设备历史遥测数据 | 是   |
 | GET    | /api/alert-logs             | 告警历史（?device_id 筛选） | 是   |
+| POST   | /api/scheduled-tasks        | 创建定时任务       | 是   |
+| GET    | /api/scheduled-tasks        | 定时任务列表（?device_id 筛选） | 是   |
+| GET    | /api/scheduled-tasks/:id    | 定时任务详情       | 是   |
+| PUT    | /api/scheduled-tasks/:id    | 更新定时任务       | 是   |
+| DELETE | /api/scheduled-tasks/:id    | 删除定时任务       | 是   |
 
 ------
 
@@ -330,6 +390,8 @@ docker-compose logs -f web
 - [x] 功能模块系统（平台级模块 + 物模型绑定）
 - [x] 语音控制（本地关键词匹配 NLP，通过 MQTT voice topic）
 - [x] 告警系统（阈值规则 + WebSocket 通知 + 告警历史）
+- [x] 数据可视化（历史趋势图表，recharts LineChart）
+- [x] 定时任务系统（Cron 调度 + MQTT 下发 + 前端管理）
 - [ ] 视频接入（RTMP）
 
 ------
@@ -511,3 +573,59 @@ alert_logs (id BIGSERIAL PK, rule_id, user_id, device_id, device_name, property_
 - 前端通知使用 sonner（`toast.success/error`）
 - Broker 内部缓存：`devices` sync.Map 缓存已连接设备信息，`models` sync.Map 缓存物模型属性，`alertRules` sync.Map 缓存告警规则
 - WebSocket Hub 通过 `SendToUser(userID, msg)` 推送消息，Broker 持有 Hub 引用
+
+------
+
+## 测试规范
+
+### 统一测试包
+
+所有测试统一放在 `tests/` 包（`package tests`），每个功能模块一个测试文件。新增功能时在 `tests/` 下新建对应的 `xxx_test.go`。
+
+### 文件结构
+
+| 文件 | 说明 |
+|------|------|
+| `tests/setup_test.go` | 共享配置加载（`init()` 读取 `testdata/auth_test.json`） |
+| `tests/setup_integration_test.go` | 集成测试 PG/Redis 初始化 + setupRouter（`//go:build integration`） |
+| `tests/auth_test.go` | 认证单元测试（mock UserRepo + TokenGenerator） |
+| `tests/jwt_test.go` | JWT 单元测试（mock TokenStore） |
+| `tests/auth_integration_test.go` | 认证集成测试（真实 PG + Redis） |
+| `tests/api_helpers_test.go` | API 测试基础设施（路由初始化 + HTTP 辅助函数） |
+| `tests/api_auth_test.go` | 认证 API 测试（注册/登录/登出/me/未授权） |
+| `tests/api_thing_model_test.go` | 物模型 API 测试（CRUD 全流程） |
+| `tests/api_device_test.go` | 设备 API 测试（CRUD + 最新数据 + 历史数据） |
+| `tests/api_stats_test.go` | 仪表盘统计 API 测试 |
+| `tests/api_module_test.go` | 功能模块 API 测试（列表 + 详情） |
+| `tests/api_alert_test.go` | 告警规则 CRUD + 告警日志列表 API 测试 |
+| `tests/api_scheduled_task_test.go` | 定时任务 CRUD API 测试 |
+
+### Mock 生成
+
+接口定义在 `internal/service/interfaces.go`，mock 通过 mockgen 生成：
+
+```bash
+mockgen -source=internal/service/interfaces.go -destination=internal/service/mock/mock_interfaces.go -package=mock
+```
+
+### 运行测试
+
+```bash
+# 单元测试
+go test ./tests/ -v
+
+# 集成测试（需本地 PG + Redis）
+go test -tags integration ./tests/ -v
+```
+
+### 测试配置
+
+测试账号存储在 `testdata/auth_test.json`，邮箱统一使用 `@linkflow.dev` 域名。集成测试 Redis 使用 DB 1 与开发环境隔离。
+
+### 新增功能测试约定
+
+1. 在 `tests/` 下新建 `{feature}_test.go`
+2. 如需 mock 新接口，在 `internal/service/interfaces.go` 添加接口定义，重新运行 mockgen
+3. 如需新测试账号，在 `testdata/auth_test.json` 的 `accounts` 中添加
+4. 集成测试文件头部加 `//go:build integration`
+5. 更新本节文件结构表

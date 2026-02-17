@@ -170,6 +170,12 @@ export interface DeviceLatestData {
   errors?: Record<string, string>;
 }
 
+export interface DeviceHistoryData {
+  time: string;
+  payload: Record<string, unknown>;
+  valid: boolean;
+}
+
 export const deviceApi = {
   list: (page = 1, pageSize = 10) =>
     api.get<ListResponse<Device>>('/devices', { params: { page, page_size: pageSize } }),
@@ -178,6 +184,8 @@ export const deviceApi = {
   update: (id: string, data: DeviceRequest) => api.put<Device>(`/devices/${id}`, data),
   delete: (id: string) => api.delete(`/devices/${id}`),
   latestData: (id: string) => api.get<DeviceLatestData | null>(`/devices/${id}/data/latest`),
+  dataHistory: (id: string, start: string, end: string, limit = 200) =>
+    api.get<DeviceHistoryData[]>(`/devices/${id}/data/history`, { params: { start, end, limit } }),
 };
 
 // 统计相关类型
@@ -289,6 +297,44 @@ export const alertRuleApi = {
 export const alertLogApi = {
   list: (page = 1, pageSize = 20, deviceId?: string) =>
     api.get<ListResponse<AlertLog>>('/alert-logs', { params: { page, page_size: pageSize, ...(deviceId ? { device_id: deviceId } : {}) } }),
+};
+
+// 定时任务相关类型
+export interface ScheduledTask {
+  id: string;
+  user_id: string;
+  device_id: string;
+  device_name: string;
+  name: string;
+  cron_expr: string;
+  action_type: 'property_set' | 'service_invoke';
+  property_id?: string;
+  service_id?: string;
+  value?: unknown;
+  enabled: boolean;
+  last_run_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ScheduledTaskRequest {
+  device_id: string;
+  name: string;
+  cron_expr: string;
+  action_type: string;
+  property_id?: string;
+  service_id?: string;
+  value?: unknown;
+  enabled: boolean;
+}
+
+export const scheduledTaskApi = {
+  list: (page = 1, pageSize = 10, deviceId?: string) =>
+    api.get<ListResponse<ScheduledTask>>('/scheduled-tasks', { params: { page, page_size: pageSize, ...(deviceId ? { device_id: deviceId } : {}) } }),
+  get: (id: string) => api.get<ScheduledTask>(`/scheduled-tasks/${id}`),
+  create: (data: ScheduledTaskRequest) => api.post<ScheduledTask>('/scheduled-tasks', data),
+  update: (id: string, data: ScheduledTaskRequest) => api.put<ScheduledTask>(`/scheduled-tasks/${id}`, data),
+  delete: (id: string) => api.delete(`/scheduled-tasks/${id}`),
 };
 
 export default api;

@@ -291,8 +291,121 @@ INSERT INTO modules (id, name, description, config_schema) VALUES (
     }'
 ) ON CONFLICT (id) DO NOTHING;
 
+-- 插入内置定时任务模块
+INSERT INTO modules (id, name, description, config_schema) VALUES (
+    'scheduler',
+    '定时任务模块',
+    '支持为设备创建定时任务，按 Cron 表达式周期性执行属性设置或服务调用。',
+    '{"enabled": {"type": "boolean", "description": "是否启用定时任务"}}'
+) ON CONFLICT (id) DO NOTHING;
+
 GRANT SELECT ON modules TO linkflow_app;
 GRANT SELECT ON modules TO linkflow_read;
+
+-- ============ Alert Rules Table (告警规则) ============
+CREATE TABLE IF NOT EXISTS alert_rules (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name VARCHAR(100) NOT NULL,
+    device_id UUID NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+    model_id UUID REFERENCES thing_models(id) ON DELETE SET NULL,
+    property_id VARCHAR(100) NOT NULL,
+    operator VARCHAR(10) NOT NULL CHECK (operator IN ('>', '>=', '<', '<=', '==', '!=')),
+    threshold DOUBLE PRECISION NOT NULL DEFAULT 0,
+    severity VARCHAR(20) NOT NULL DEFAULT 'info' CHECK (severity IN ('info', 'warning', 'critical')),
+    enabled BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE alert_rules ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY alert_rules_app_policy ON alert_rules
+    FOR ALL TO linkflow_app
+    USING (user_id::text = current_setting('app.current_user_id', true))
+    WITH CHECK (user_id::text = current_setting('app.current_user_id', true));
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON alert_rules TO linkflow_app;
+GRANT SELECT ON alert_rules TO linkflow_read;
+GRANT ALL ON alert_rules TO linkflow_admin;
+
+CREATE INDEX idx_alert_rules_user_id ON alert_rules(user_id);
+CREATE INDEX idx_alert_rules_device_id ON alert_rules(device_id);
+
+-- ============ Alert Logs Table (告警日志) ============
+CREATE TABLE IF NOT EXISTS alert_logs (
+    id BIGSERIAL PRIMARY KEY,
+    rule_id UUID REFERENCES alert_rules(id) ON DELETE SET NULL,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    device_id UUID NOT NULL,
+    device_name VARCHAR(100) NOT NULL DEFAULT '',
+    property_id VARCHAR(100) NOT NULL,
+    property_name VARCHAR(100) NOT NULL DEFAULT '',
+    operator VARCHAR(10) NOT NULL,
+    threshold DOUBLE PRECISION NOT NULL,
+    actual_value DOUBLE PRECISION NOT NULL,
+    severity VARCHAR(20) NOT NULL DEFAULT 'info',
+    rule_name VARCHAR(100) NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE alert_logs ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY alert_logs_app_policy ON alert_logs
+    FOR ALL TO linkflow_app
+    USING (user_id::text = current_setting('app.current_user_id', true))
+    WITH CHECK (user_id::text = current_setting('app.current_user_id', true));
+
+GRANT SELECT, INSERT ON alert_logs TO linkflow_app;
+GRANT SELECT ON alert_logs TO linkflow_read;
+GRANT ALL ON alert_logs TO linkflow_admin;
+GRANT USAGE, SELECT ON SEQUENCE alert_logs_id_seq TO linkflow_app;
+GRANT USAGE, SELECT ON SEQUENCE alert_logs_id_seq TO linkflow_admin;
+
+CREATE INDEX idx_alert_logs_user_id ON alert_logs(user_id);
+CREATE INDEX idx_alert_logs_created_at ON alert_logs(created_at DESC);
+CREATE INDEX idx_alert_logs_rule_id ON alert_logs(rule_id);
+
+-- ============ Scheduled Tasks Table (定时任务) ============
+CREATE TABLE IF NOT EXISTS scheduled_tasks (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    device_id UUID NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+    name VARCHAR(100) NOT NULL,
+    cron_expr VARCHAR(100) NOT NULL,
+    action_type VARCHAR(20) NOT NULL CHECK (action_type IN ('property_set', 'service_invoke')),
+    property_id VARCHAR(100),
+    service_id VARCHAR(100),
+    value JSONB,
+    enabled BOOLEAN NOT NULL DEFAULT true,
+    last_run_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_user_id ON scheduled_tasks(user_id);
+CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_device_id ON scheduled_tasks(device_id);
+CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_enabled ON scheduled_tasks(enabled) WHERE enabled = true;
+
+DROP TRIGGER IF EXISTS scheduled_tasks_updated_at ON scheduled_tasks;
+CREATE TRIGGER scheduled_tasks_updated_at
+    BEFORE UPDATE ON scheduled_tasks
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at();
+
+-- Scheduled Tasks RLS
+ALTER TABLE scheduled_tasks ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY scheduled_tasks_app_policy ON scheduled_tasks
+    FOR ALL
+    TO linkflow_app
+    USING (user_id::text = current_setting('app.current_user_id', true))
+    WITH CHECK (user_id::text = current_setting('app.current_user_id', true));
+
+ALTER TABLE scheduled_tasks FORCE ROW LEVEL SECURITY;
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON scheduled_tasks TO linkflow_app;
+GRANT SELECT ON scheduled_tasks TO linkflow_read;
 
 -- ============ Audit Logs Table (审计日志) ============
 CREATE TABLE IF NOT EXISTS audit_logs (

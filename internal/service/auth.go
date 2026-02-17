@@ -15,11 +15,11 @@ var (
 )
 
 type AuthService struct {
-	userRepo   *repository.UserRepository
-	jwtService *JWTService
+	userRepo   UserRepo
+	jwtService TokenGenerator
 }
 
-func NewAuthService(userRepo *repository.UserRepository, jwtService *JWTService) *AuthService {
+func NewAuthService(userRepo UserRepo, jwtService TokenGenerator) *AuthService {
 	return &AuthService{
 		userRepo:   userRepo,
 		jwtService: jwtService,

@@ -52,6 +52,49 @@ type DeviceLatestData struct {
 	Errors  map[string]string      `json:"errors,omitempty"`
 }
 
+// DeviceHistoryData 历史遥测数据
+type DeviceHistoryData struct {
+	Time    time.Time              `json:"time"`
+	Payload map[string]interface{} `json:"payload"`
+	Valid   bool                   `json:"valid"`
+}
+
+// GetDataHistory 获取设备历史遥测数据
+func (r *DeviceDataRepository) GetDataHistory(ctx context.Context, deviceID string, start, end time.Time, limit int) ([]DeviceHistoryData, error) {
+	rows, err := r.query(ctx, `
+		SELECT time, payload, valid
+		FROM device_data
+		WHERE device_id = $1 AND time BETWEEN $2 AND $3
+		ORDER BY time ASC
+		LIMIT $4
+	`, deviceID, start, end, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []DeviceHistoryData
+	for rows.Next() {
+		var d DeviceHistoryData
+		var payloadRaw []byte
+		if err := rows.Scan(&d.Time, &payloadRaw, &d.Valid); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(payloadRaw, &d.Payload); err != nil {
+			return nil, err
+		}
+		result = append(result, d)
+	}
+	return result, nil
+}
+
+func (r *DeviceDataRepository) query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	if conn := database.RLSConn(ctx); conn != nil {
+		return conn.Query(ctx, sql, args...)
+	}
+	return r.pool.Query(ctx, sql, args...)
+}
+
 // GetLatestData 获取设备最新一条遥测数据
 func (r *DeviceDataRepository) GetLatestData(ctx context.Context, deviceID string) (*DeviceLatestData, error) {
 	var (

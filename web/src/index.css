@@ -42,6 +42,10 @@
   --radius-md: 0.5rem;
   --radius-lg: 0.75rem;
   --radius-xl: 1rem;
+
+  --color-login-from: #0a0f0d;
+  --color-login-via: #0d1a14;
+  --color-login-to: #0a1510;
 }
 
 @layer base {
@@ -82,4 +86,48 @@
   *::-webkit-scrollbar-thumb:hover {
     background-color: var(--color-primary);
   }
+}
+
+/* 天蓝色主题（浅色） */
+[data-theme="blue"] {
+  --color-background: #eef2f6;
+  --color-foreground: #1e293b;
+
+  --color-card: #f8f9fb;
+  --color-card-foreground: #1e293b;
+
+  --color-popover: #f8f9fb;
+  --color-popover-foreground: #1e293b;
+
+  --color-primary: #2563eb;
+  --color-primary-foreground: #ffffff;
+
+  --color-secondary: #e2e8f0;
+  --color-secondary-foreground: #334155;
+
+  --color-muted: #e8ecf1;
+  --color-muted-foreground: #64748b;
+
+  --color-accent: #dbeafe;
+  --color-accent-foreground: #1e40af;
+
+  --color-destructive: #dc2626;
+  --color-destructive-foreground: #ffffff;
+
+  --color-border: #cbd5e1;
+  --color-input: #cbd5e1;
+  --color-ring: #2563eb;
+
+  --color-sidebar: #f1f5f9;
+  --color-sidebar-foreground: #1e293b;
+  --color-sidebar-border: #cbd5e1;
+  --color-sidebar-accent: #dbeafe;
+  --color-sidebar-accent-foreground: #2563eb;
+
+  --color-warning: #d97706;
+  --color-info: #2563eb;
+
+  --color-login-from: #dbeafe;
+  --color-login-via: #eef2f6;
+  --color-login-to: #e2e8f0;
 }

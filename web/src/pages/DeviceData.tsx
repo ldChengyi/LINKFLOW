@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { toast } from 'sonner';
-import { Activity, RefreshCw, Copy, Check, Mic, Blocks } from 'lucide-react';
+import { Activity, RefreshCw, Copy, Check, Mic, Blocks, Clock } from 'lucide-react';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { deviceApi, thingModelApi } from '../api';
-import type { Device, ThingModel, DeviceLatestData, Property } from '../api';
+import type { Device, ThingModel, DeviceLatestData, DeviceHistoryData, Property } from '../api';
 import { onWSMessage } from './Dashboard';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -21,6 +22,9 @@ export default function DeviceData() {
   const [latestData, setLatestData] = useState<DeviceLatestData | null>(null);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [historyData, setHistoryData] = useState<DeviceHistoryData[]>([]);
+  const [historyRange, setHistoryRange] = useState('1h');
+  const [historyLoading, setHistoryLoading] = useState(false);
 
   useEffect(() => {
     fetchDevices();
@@ -76,6 +80,38 @@ export default function DeviceData() {
       setRefreshing(false);
     }
   };
+
+  const fetchHistory = async (range: string) => {
+    if (!selectedId) return;
+    setHistoryLoading(true);
+    const end = new Date().toISOString();
+    const ms: Record<string, number> = { '1h': 3600000, '6h': 21600000, '24h': 86400000, '7d': 604800000 };
+    const start = new Date(Date.now() - (ms[range] || 3600000)).toISOString();
+    try {
+      const res = await deviceApi.dataHistory(selectedId, start, end);
+      setHistoryData(res.data || []);
+    } catch { /* silent */ }
+    finally { setHistoryLoading(false); }
+  };
+
+  useEffect(() => {
+    if (selectedId && historyRange) fetchHistory(historyRange);
+  }, [selectedId, historyRange]);
+
+  const numericProps = useMemo(() =>
+    (thingModel?.properties || []).filter(p => p.dataType === 'int' || p.dataType === 'float'),
+    [thingModel]
+  );
+
+  const chartData = useMemo(() =>
+    historyData.map(d => ({
+      time: new Date(d.time).toLocaleTimeString(),
+      ...Object.fromEntries(numericProps.map(p => [p.id, d.payload[p.id] ?? null])),
+    })),
+    [historyData, numericProps]
+  );
+
+  const COLORS = ['#10b981', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
 
   // 实时遥测数据更新
   useEffect(() => {
@@ -145,6 +181,7 @@ export default function DeviceData() {
             {thingModel?.modules && thingModel.modules.length > 0 && (
               <TabsTrigger value="modules">模块 ({thingModel.modules.length})</TabsTrigger>
             )}
+            <TabsTrigger value="history">历史趋势</TabsTrigger>
             <TabsTrigger value="api">接口详情</TabsTrigger>
           </TabsList>
 
@@ -529,7 +566,7 @@ export default function DeviceData() {
                 {thingModel.modules.map((mod) => {
                   const exposedProps = mod.config?.exposed_properties || [];
                   const exposedSvcs = mod.config?.exposed_services || [];
-                  const Icon = mod.id === 'voice' ? Mic : Blocks;
+                  const Icon = mod.id === 'voice' ? Mic : mod.id === 'scheduler' ? Clock : Blocks;
 
                   return (
                     <Card key={mod.id}>
@@ -539,7 +576,7 @@ export default function DeviceData() {
                             <Icon className="h-5 w-5 text-primary" />
                           </div>
                           <div>
-                            <CardTitle className="text-base">{mod.id === 'voice' ? '语音控制模块' : mod.id}</CardTitle>
+                            <CardTitle className="text-base">{mod.id === 'voice' ? '语音控制模块' : mod.id === 'scheduler' ? '定时任务模块' : mod.id}</CardTitle>
                             <p className="text-xs text-muted-foreground mt-0.5">模块ID: {mod.id}</p>
                           </div>
                           <Badge variant="default" className="ml-auto">已启用</Badge>
@@ -612,6 +649,46 @@ export default function DeviceData() {
               </div>
             </TabsContent>
           )}
+
+          {/* Tab: 历史趋势 */}
+          <TabsContent value="history">
+            <Card>
+              <CardHeader className="pb-3">
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-base">历史趋势</CardTitle>
+                  <div className="flex gap-1">
+                    {['1h', '6h', '24h', '7d'].map(r => (
+                      <Button key={r} size="sm" variant={historyRange === r ? 'default' : 'outline'}
+                        onClick={() => setHistoryRange(r)}>{r === '1h' ? '1小时' : r === '6h' ? '6小时' : r === '24h' ? '24小时' : '7天'}</Button>
+                    ))}
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent>
+                {historyLoading ? (
+                  <div className="flex justify-center py-10"><Spinner size="lg" /></div>
+                ) : numericProps.length === 0 ? (
+                  <p className="text-center py-10 text-muted-foreground">无数值类型属性可展示</p>
+                ) : chartData.length === 0 ? (
+                  <p className="text-center py-10 text-muted-foreground">该时间范围内暂无数据</p>
+                ) : (
+                  <ResponsiveContainer width="100%" height={400}>
+                    <LineChart data={chartData}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#333" />
+                      <XAxis dataKey="time" tick={{ fontSize: 12 }} stroke="#888" />
+                      <YAxis tick={{ fontSize: 12 }} stroke="#888" />
+                      <Tooltip contentStyle={{ background: '#1a1a2e', border: '1px solid #333', borderRadius: 8 }} />
+                      <Legend />
+                      {numericProps.map((p, i) => (
+                        <Line key={p.id} type="monotone" dataKey={p.id} name={`${p.name}${p.unit ? ` (${p.unit})` : ''}`}
+                          stroke={COLORS[i % COLORS.length]} dot={false} strokeWidth={2} />
+                      ))}
+                    </LineChart>
+                  </ResponsiveContainer>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
 
           {/* Tab 3: 接口详情 */}
           <TabsContent value="api">

@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/ldchengyi/linkflow/internal/cache"
 	"github.com/ldchengyi/linkflow/internal/model"
 )
 
@@ -30,14 +29,14 @@ type Claims struct {
 type JWTService struct {
 	secret      []byte
 	expireHours int
-	redis       *cache.Redis
+	store       TokenStore
 }
 
-func NewJWTService(secret string, expireHours int, redis *cache.Redis) *JWTService {
+func NewJWTService(secret string, expireHours int, store TokenStore) *JWTService {
 	return &JWTService{
 		secret:      []byte(secret),
 		expireHours: expireHours,
-		redis:       redis,
+		store:       store,
 	}
 }
 
@@ -66,7 +65,7 @@ func (s *JWTService) Generate(ctx context.Context, user *model.User) (string, er
 
 	// 存入 Redis，key 为 token:userID:tokenHash
 	key := s.tokenKey(user.ID, tokenString)
-	if err := s.redis.Set(ctx, key, "1", expiration); err != nil {
+	if err := s.store.Set(ctx, key, "1", expiration); err != nil {
 		return "", fmt.Errorf("store token: %w", err)
 	}
 
@@ -97,7 +96,7 @@ func (s *JWTService) Validate(ctx context.Context, tokenString string) (*Claims,
 
 	// 2. 检查 Redis 中是否存在（未被撤销）
 	key := s.tokenKey(claims.UserID, tokenString)
-	exists, err := s.redis.Exists(ctx, key)
+	exists, err := s.store.Exists(ctx, key)
 	if err != nil {
 		return nil, fmt.Errorf("check token: %w", err)
 	}
@@ -111,18 +110,18 @@ func (s *JWTService) Validate(ctx context.Context, tokenString string) (*Claims,
 // Revoke 撤销 token（登出）
 func (s *JWTService) Revoke(ctx context.Context, userID, tokenString string) error {
 	key := s.tokenKey(userID, tokenString)
-	return s.redis.Del(ctx, key)
+	return s.store.Del(ctx, key)
 }
 
 // RevokeAll 撤销用户所有 token（强制登出所有设备）
 func (s *JWTService) RevokeAll(ctx context.Context, userID string) error {
 	pattern := fmt.Sprintf("%s%s:*", tokenKeyPrefix, userID)
-	keys, err := s.redis.Client().Keys(ctx, pattern).Result()
+	keys, err := s.store.Keys(ctx, pattern)
 	if err != nil {
 		return err
 	}
 	if len(keys) > 0 {
-		return s.redis.Del(ctx, keys...)
+		return s.store.Del(ctx, keys...)
 	}
 	return nil
 }

@@ -17,6 +17,7 @@ import (
 	"github.com/ldchengyi/linkflow/internal/middleware"
 	mqttbroker "github.com/ldchengyi/linkflow/internal/mqtt"
 	"github.com/ldchengyi/linkflow/internal/repository"
+	"github.com/ldchengyi/linkflow/internal/scheduler"
 	"github.com/ldchengyi/linkflow/internal/service"
 	"github.com/ldchengyi/linkflow/internal/ws"
 )
@@ -75,6 +76,8 @@ func main() {
 	auditLogRepo := repository.NewAuditLogRepository(db.Admin())
 	alertRuleRepoApp := repository.NewAlertRuleRepository(db.App())
 	alertLogRepoApp := repository.NewAlertLogRepository(db.App())
+	scheduledTaskRepoApp := repository.NewScheduledTaskRepository(db.App())
+	scheduledTaskRepoAdmin := repository.NewScheduledTaskRepository(db.Admin())
 
 	// MQTT 专用 Repository（使用 Admin pool 绕过 RLS）
 	mqttDeviceRepo := repository.NewDeviceRepository(db.Admin())
@@ -90,6 +93,10 @@ func main() {
 	}
 	logger.Log.Info("MQTT broker started")
 
+	// 初始化 Scheduler
+	sched := scheduler.New(scheduledTaskRepoAdmin, broker)
+	sched.Start()
+
 	// 初始化 Handler
 	authHandler := handler.NewAuthHandler(authService)
 	thingModelHandler := handler.NewThingModelHandler(thingModelRepo, db.App())
@@ -100,6 +107,7 @@ func main() {
 	wsHandler := handler.NewWSHandler(hub, jwtService)
 	alertRuleHandler := handler.NewAlertRuleHandler(alertRuleRepoApp, db.App(), broker)
 	alertLogHandler := handler.NewAlertLogHandler(alertLogRepoApp, db.App())
+	scheduledTaskHandler := handler.NewScheduledTaskHandler(scheduledTaskRepoApp, db.App())
 
 	// 设置路由
 	router := gin.Default()
@@ -152,6 +160,7 @@ func main() {
 				devices.GET("", deviceHandler.List)
 				devices.GET("/:id", deviceHandler.Get)
 				devices.GET("/:id/data/latest", deviceHandler.LatestData)
+				devices.GET("/:id/data/history", deviceHandler.History)
 				devices.PUT("/:id", deviceHandler.Update)
 				devices.DELETE("/:id", deviceHandler.Delete)
 			}
@@ -178,6 +187,16 @@ func main() {
 
 			// 告警日志路由
 			protected.GET("/alert-logs", alertLogHandler.List)
+
+			// 定时任务路由
+			scheduledTasks := protected.Group("/scheduled-tasks")
+			{
+				scheduledTasks.POST("", scheduledTaskHandler.Create)
+				scheduledTasks.GET("", scheduledTaskHandler.List)
+				scheduledTasks.GET("/:id", scheduledTaskHandler.Get)
+				scheduledTasks.PUT("/:id", scheduledTaskHandler.Update)
+				scheduledTasks.DELETE("/:id", scheduledTaskHandler.Delete)
+			}
 
 			// 审计日志路由（admin 查所有，普通用户查自己的）
 			protected.GET("/audit-logs", auditLogHandler.List)
@@ -206,7 +225,8 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// 先停 MQTT broker
+	// 先停 Scheduler 和 MQTT broker
+	sched.Stop()
 	if err := broker.Stop(ctx); err != nil {
 		logger.Log.Errorf("MQTT broker shutdown error: %v", err)
 	}

@@ -1,14 +1,18 @@
 import { useState } from 'react';
-import { toast } from 'sonner';
 import { authApi } from '../api';
+import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import { Loader2, Mail, Lock, Leaf } from 'lucide-react';
+import { Loader2, Mail, Lock, Leaf, CheckCircle2, XCircle } from 'lucide-react';
+import { useTheme } from '../hooks/useTheme';
+
+type FormMsg = { type: 'success' | 'error'; text: string } | null;
 
 export default function Login() {
+  useTheme();
   const [loading, setLoading] = useState(false);
 
   const [loginEmail, setLoginEmail] = useState('');
@@ -18,21 +22,31 @@ export default function Login() {
   const [regPassword, setRegPassword] = useState('');
   const [regConfirm, setRegConfirm] = useState('');
 
+  const [formMsg, setFormMsg] = useState<FormMsg>(null);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, boolean>>({});
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!loginEmail || !loginPassword) {
-      toast.error('请填写邮箱和密码');
+    setFormMsg(null);
+    const errors: Record<string, boolean> = {};
+    if (!loginEmail) errors['login-email'] = true;
+    if (!loginPassword) errors['login-password'] = true;
+    if (Object.keys(errors).length) {
+      setFieldErrors(errors);
+      setFormMsg({ type: 'error', text: '请填写邮箱和密码' });
       return;
     }
+    setFieldErrors({});
     setLoading(true);
     try {
       const { data } = await authApi.login({ email: loginEmail, password: loginPassword });
       localStorage.setItem('token', data.token);
-      toast.success('登录成功');
-      window.location.href = '/';
+      setFormMsg({ type: 'success', text: '登录成功，正在跳转...' });
+      setTimeout(() => { window.location.href = '/'; }, 800);
     } catch (error: unknown) {
       const err = error as { response?: { data?: { msg?: string } } };
-      toast.error(err.response?.data?.msg || '登录失败');
+      const msg = err.response?.data?.msg || '登录失败，请检查邮箱和密码';
+      setFormMsg({ type: 'error', text: msg });
     } finally {
       setLoading(false);
     }
@@ -40,34 +54,44 @@ export default function Login() {
 
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!regEmail || !regPassword || !regConfirm) {
-      toast.error('请填写所有字段');
-      return;
-    }
-    if (regPassword !== regConfirm) {
-      toast.error('两次密码输入不一致');
+    setFormMsg(null);
+    const errors: Record<string, boolean> = {};
+    if (!regEmail) errors['reg-email'] = true;
+    if (!regPassword) errors['reg-password'] = true;
+    if (!regConfirm) errors['reg-confirm'] = true;
+    if (Object.keys(errors).length) {
+      setFieldErrors(errors);
+      setFormMsg({ type: 'error', text: '请填写所有字段' });
       return;
     }
     if (regPassword.length < 6) {
-      toast.error('密码至少6位');
+      setFieldErrors({ 'reg-password': true });
+      setFormMsg({ type: 'error', text: '密码至少6位' });
       return;
     }
+    if (regPassword !== regConfirm) {
+      setFieldErrors({ 'reg-confirm': true });
+      setFormMsg({ type: 'error', text: '两次密码输入不一致' });
+      return;
+    }
+    setFieldErrors({});
     setLoading(true);
     try {
       const { data } = await authApi.register({ email: regEmail, password: regPassword });
       localStorage.setItem('token', data.token);
-      toast.success('注册成功');
-      window.location.href = '/';
+      setFormMsg({ type: 'success', text: '注册成功，正在跳转...' });
+      setTimeout(() => { window.location.href = '/'; }, 800);
     } catch (error: unknown) {
       const err = error as { response?: { data?: { msg?: string } } };
-      toast.error(err.response?.data?.msg || '注册失败');
+      const msg = err.response?.data?.msg || '注册失败，请稍后重试';
+      setFormMsg({ type: 'error', text: msg });
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-[#0a0f0d] via-[#0d1a14] to-[#0a1510] relative overflow-hidden">
+    <div className="min-h-screen flex items-center justify-center relative overflow-hidden" style={{ background: `linear-gradient(to bottom right, var(--color-login-from), var(--color-login-via), var(--color-login-to))` }}>
       {/* Background glow */}
       <div className="absolute inset-0 overflow-hidden">
         <div className="absolute -top-40 -right-40 w-80 h-80 bg-primary/5 rounded-full blur-3xl" />
@@ -86,7 +110,7 @@ export default function Login() {
           <CardDescription>物联网云平台</CardDescription>
         </CardHeader>
         <CardContent>
-          <Tabs defaultValue="login" className="w-full">
+          <Tabs defaultValue="login" className="w-full" onValueChange={() => { setFormMsg(null); setFieldErrors({}); }}>
             <TabsList className="grid w-full grid-cols-2 mb-6">
               <TabsTrigger value="login">登录</TabsTrigger>
               <TabsTrigger value="register">注册</TabsTrigger>
@@ -97,31 +121,37 @@ export default function Login() {
                 <div className="space-y-2">
                   <Label htmlFor="login-email">邮箱</Label>
                   <div className="relative">
-                    <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Mail className={cn("absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4", fieldErrors['login-email'] ? 'text-destructive' : 'text-muted-foreground')} />
                     <Input
                       id="login-email"
                       type="email"
                       placeholder="请输入邮箱"
-                      className="pl-10"
+                      className={cn("pl-10", fieldErrors['login-email'] && 'border-destructive')}
                       value={loginEmail}
-                      onChange={(e) => setLoginEmail(e.target.value)}
+                      onChange={(e) => { setLoginEmail(e.target.value); setFieldErrors(p => ({ ...p, 'login-email': false })); }}
                     />
                   </div>
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="login-password">密码</Label>
                   <div className="relative">
-                    <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Lock className={cn("absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4", fieldErrors['login-password'] ? 'text-destructive' : 'text-muted-foreground')} />
                     <Input
                       id="login-password"
                       type="password"
                       placeholder="请输入密码"
-                      className="pl-10"
+                      className={cn("pl-10", fieldErrors['login-password'] && 'border-destructive')}
                       value={loginPassword}
-                      onChange={(e) => setLoginPassword(e.target.value)}
+                      onChange={(e) => { setLoginPassword(e.target.value); setFieldErrors(p => ({ ...p, 'login-password': false })); }}
                     />
                   </div>
                 </div>
+                {formMsg && (
+                  <div className={cn("flex items-center gap-2 text-sm px-3 py-2 rounded-lg", formMsg.type === 'error' ? 'bg-destructive/10 text-destructive' : 'bg-primary/10 text-primary')}>
+                    {formMsg.type === 'error' ? <XCircle className="h-4 w-4 shrink-0" /> : <CheckCircle2 className="h-4 w-4 shrink-0" />}
+                    {formMsg.text}
+                  </div>
+                )}
                 <Button type="submit" className="w-full" disabled={loading}>
                   {loading && <Loader2 className="h-4 w-4 animate-spin" />}
                   登录
@@ -134,45 +164,51 @@ export default function Login() {
                 <div className="space-y-2">
                   <Label htmlFor="reg-email">邮箱</Label>
                   <div className="relative">
-                    <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Mail className={cn("absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4", fieldErrors['reg-email'] ? 'text-destructive' : 'text-muted-foreground')} />
                     <Input
                       id="reg-email"
                       type="email"
                       placeholder="请输入邮箱"
-                      className="pl-10"
+                      className={cn("pl-10", fieldErrors['reg-email'] && 'border-destructive')}
                       value={regEmail}
-                      onChange={(e) => setRegEmail(e.target.value)}
+                      onChange={(e) => { setRegEmail(e.target.value); setFieldErrors(p => ({ ...p, 'reg-email': false })); }}
                     />
                   </div>
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="reg-password">密码</Label>
                   <div className="relative">
-                    <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Lock className={cn("absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4", fieldErrors['reg-password'] ? 'text-destructive' : 'text-muted-foreground')} />
                     <Input
                       id="reg-password"
                       type="password"
                       placeholder="密码至少6位"
-                      className="pl-10"
+                      className={cn("pl-10", fieldErrors['reg-password'] && 'border-destructive')}
                       value={regPassword}
-                      onChange={(e) => setRegPassword(e.target.value)}
+                      onChange={(e) => { setRegPassword(e.target.value); setFieldErrors(p => ({ ...p, 'reg-password': false })); }}
                     />
                   </div>
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="reg-confirm">确认密码</Label>
                   <div className="relative">
-                    <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Lock className={cn("absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4", fieldErrors['reg-confirm'] ? 'text-destructive' : 'text-muted-foreground')} />
                     <Input
                       id="reg-confirm"
                       type="password"
                       placeholder="再次输入密码"
-                      className="pl-10"
+                      className={cn("pl-10", fieldErrors['reg-confirm'] && 'border-destructive')}
                       value={regConfirm}
-                      onChange={(e) => setRegConfirm(e.target.value)}
+                      onChange={(e) => { setRegConfirm(e.target.value); setFieldErrors(p => ({ ...p, 'reg-confirm': false })); }}
                     />
                   </div>
                 </div>
+                {formMsg && (
+                  <div className={cn("flex items-center gap-2 text-sm px-3 py-2 rounded-lg", formMsg.type === 'error' ? 'bg-destructive/10 text-destructive' : 'bg-primary/10 text-primary')}>
+                    {formMsg.type === 'error' ? <XCircle className="h-4 w-4 shrink-0" /> : <CheckCircle2 className="h-4 w-4 shrink-0" />}
+                    {formMsg.text}
+                  </div>
+                )}
                 <Button type="submit" className="w-full" disabled={loading}>
                   {loading && <Loader2 className="h-4 w-4 animate-spin" />}
                   注册

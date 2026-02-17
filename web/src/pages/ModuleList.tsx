@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
-import { Blocks, Mic, Eye } from 'lucide-react';
+import { Blocks, Mic, Eye, Clock } from 'lucide-react';
 import { moduleApi } from '../api';
 import type { Module } from '../api';
 import { Card, CardContent } from '@/components/ui/card';
@@ -13,6 +13,7 @@ import {
 
 const moduleIcons: Record<string, typeof Mic> = {
   voice: Mic,
+  scheduler: Clock,
 };
 
 export default function ModuleList() {
