@@ -1,0 +1,298 @@
+-- LinkFlow Database Initialization Template
+-- Variables will be replaced by init-db.sh
+
+-- Create roles
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'linkflow_admin') THEN
+        CREATE ROLE linkflow_admin WITH LOGIN PASSWORD '${DB_ADMIN_PASSWORD}' BYPASSRLS;
+    END IF;
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'linkflow_app') THEN
+        CREATE ROLE linkflow_app WITH LOGIN PASSWORD '${DB_APP_PASSWORD}';
+    END IF;
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'linkflow_read') THEN
+        CREATE ROLE linkflow_read WITH LOGIN PASSWORD '${DB_READ_PASSWORD}';
+    END IF;
+END
+$$;
+
+-- Create database if not exists
+SELECT 'CREATE DATABASE linkflow OWNER linkflow_admin'
+WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'linkflow')\gexec
+
+-- Connect to linkflow database
+\c linkflow
+
+-- Enable extensions
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS timescaledb;
+
+-- Grant schema usage
+GRANT USAGE ON SCHEMA public TO linkflow_app, linkflow_read;
+
+-- linkflow_admin: full control
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO linkflow_admin;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO linkflow_admin;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO linkflow_admin;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO linkflow_admin;
+
+-- linkflow_app: CRUD
+ALTER DEFAULT PRIVILEGES FOR ROLE linkflow_admin IN SCHEMA public
+    GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO linkflow_app;
+ALTER DEFAULT PRIVILEGES FOR ROLE linkflow_admin IN SCHEMA public
+    GRANT USAGE, SELECT ON SEQUENCES TO linkflow_app;
+
+-- linkflow_read: read only
+ALTER DEFAULT PRIVILEGES FOR ROLE linkflow_admin IN SCHEMA public
+    GRANT SELECT ON TABLES TO linkflow_read;
+
+-- ============ Users Table ============
+CREATE TABLE IF NOT EXISTS users (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    email VARCHAR(255) NOT NULL UNIQUE,
+    password_hash VARCHAR(255) NOT NULL,
+    role VARCHAR(20) NOT NULL DEFAULT 'user' CHECK (role IN ('admin', 'user', 'viewer')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
+
+-- Update trigger
+CREATE OR REPLACE FUNCTION update_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS users_updated_at ON users;
+CREATE TRIGGER users_updated_at
+    BEFORE UPDATE ON users
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at();
+
+-- ============ Thing Models Table (物模型) ============
+CREATE TABLE IF NOT EXISTS thing_models (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name VARCHAR(100) NOT NULL,
+    description TEXT,
+    -- 属性定义 JSON数组
+    properties JSONB NOT NULL DEFAULT '[]',
+    -- 事件定义 JSON数组
+    events JSONB NOT NULL DEFAULT '[]',
+    -- 服务定义 JSON数组
+    services JSONB NOT NULL DEFAULT '[]',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_thing_models_user_id ON thing_models(user_id);
+CREATE INDEX IF NOT EXISTS idx_thing_models_name ON thing_models(name);
+
+DROP TRIGGER IF EXISTS thing_models_updated_at ON thing_models;
+CREATE TRIGGER thing_models_updated_at
+    BEFORE UPDATE ON thing_models
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at();
+
+-- ============ Devices Table ============
+CREATE TABLE IF NOT EXISTS devices (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    model_id UUID REFERENCES thing_models(id) ON DELETE SET NULL,
+    name VARCHAR(100) NOT NULL,
+    device_secret VARCHAR(64) NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'offline' CHECK (status IN ('online', 'offline')),
+    last_online_at TIMESTAMPTZ,
+    metadata JSONB DEFAULT '{}',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_devices_user_id ON devices(user_id);
+CREATE INDEX IF NOT EXISTS idx_devices_model_id ON devices(model_id);
+CREATE INDEX IF NOT EXISTS idx_devices_status ON devices(status);
+
+DROP TRIGGER IF EXISTS devices_updated_at ON devices;
+CREATE TRIGGER devices_updated_at
+    BEFORE UPDATE ON devices
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at();
+
+-- ============ Row Level Security ============
+
+-- Thing Models RLS
+ALTER TABLE thing_models ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS thing_models_select_policy ON thing_models;
+DROP POLICY IF EXISTS thing_models_insert_policy ON thing_models;
+DROP POLICY IF EXISTS thing_models_update_policy ON thing_models;
+DROP POLICY IF EXISTS thing_models_delete_policy ON thing_models;
+
+CREATE POLICY thing_models_select_policy ON thing_models
+    FOR SELECT
+    USING (
+        user_id::text = current_setting('app.current_user_id', true)
+        OR current_setting('app.current_user_role', true) = 'admin'
+    );
+
+CREATE POLICY thing_models_insert_policy ON thing_models
+    FOR INSERT
+    WITH CHECK (
+        user_id::text = current_setting('app.current_user_id', true)
+        OR current_setting('app.current_user_role', true) = 'admin'
+    );
+
+CREATE POLICY thing_models_update_policy ON thing_models
+    FOR UPDATE
+    USING (
+        user_id::text = current_setting('app.current_user_id', true)
+        OR current_setting('app.current_user_role', true) = 'admin'
+    );
+
+CREATE POLICY thing_models_delete_policy ON thing_models
+    FOR DELETE
+    USING (
+        user_id::text = current_setting('app.current_user_id', true)
+        OR current_setting('app.current_user_role', true) = 'admin'
+    );
+
+ALTER TABLE thing_models FORCE ROW LEVEL SECURITY;
+
+-- Devices RLS
+ALTER TABLE devices ENABLE ROW LEVEL SECURITY;
+
+-- Drop existing policies
+DROP POLICY IF EXISTS devices_select_policy ON devices;
+DROP POLICY IF EXISTS devices_insert_policy ON devices;
+DROP POLICY IF EXISTS devices_update_policy ON devices;
+DROP POLICY IF EXISTS devices_delete_policy ON devices;
+
+-- Create policies
+CREATE POLICY devices_select_policy ON devices
+    FOR SELECT
+    USING (
+        user_id::text = current_setting('app.current_user_id', true)
+        OR current_setting('app.current_user_role', true) = 'admin'
+    );
+
+CREATE POLICY devices_insert_policy ON devices
+    FOR INSERT
+    WITH CHECK (
+        user_id::text = current_setting('app.current_user_id', true)
+        OR current_setting('app.current_user_role', true) = 'admin'
+    );
+
+CREATE POLICY devices_update_policy ON devices
+    FOR UPDATE
+    USING (
+        user_id::text = current_setting('app.current_user_id', true)
+        OR current_setting('app.current_user_role', true) = 'admin'
+    );
+
+CREATE POLICY devices_delete_policy ON devices
+    FOR DELETE
+    USING (
+        user_id::text = current_setting('app.current_user_id', true)
+        OR current_setting('app.current_user_role', true) = 'admin'
+    );
+
+ALTER TABLE devices FORCE ROW LEVEL SECURITY;
+
+-- ============ Device Data Hypertable (遥测数据) ============
+CREATE TABLE IF NOT EXISTS device_data (
+    time        TIMESTAMPTZ NOT NULL,
+    device_id   UUID NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+    user_id     UUID NOT NULL,
+    topic       VARCHAR(255) NOT NULL,
+    payload     JSONB NOT NULL,
+    qos         SMALLINT NOT NULL DEFAULT 0,
+    valid       BOOLEAN NOT NULL DEFAULT true,
+    errors      JSONB
+);
+
+SELECT create_hypertable('device_data', 'time', if_not_exists => TRUE);
+
+CREATE INDEX IF NOT EXISTS idx_device_data_device_time ON device_data (device_id, time DESC);
+CREATE INDEX IF NOT EXISTS idx_device_data_user_time ON device_data (user_id, time DESC);
+CREATE INDEX IF NOT EXISTS idx_device_data_valid ON device_data (valid) WHERE valid = false;
+
+-- Device Data RLS
+ALTER TABLE device_data ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS device_data_select_policy ON device_data;
+DROP POLICY IF EXISTS device_data_insert_policy ON device_data;
+
+CREATE POLICY device_data_select_policy ON device_data
+    FOR SELECT
+    USING (
+        user_id::text = current_setting('app.current_user_id', true)
+        OR current_setting('app.current_user_role', true) = 'admin'
+    );
+
+CREATE POLICY device_data_insert_policy ON device_data
+    FOR INSERT
+    WITH CHECK (
+        user_id::text = current_setting('app.current_user_id', true)
+        OR current_setting('app.current_user_role', true) = 'admin'
+    );
+
+ALTER TABLE device_data FORCE ROW LEVEL SECURITY;
+
+-- Grant permissions on tables
+GRANT SELECT, INSERT, UPDATE, DELETE ON users TO linkflow_app;
+GRANT SELECT ON users TO linkflow_read;
+GRANT SELECT, INSERT, UPDATE, DELETE ON thing_models TO linkflow_app;
+GRANT SELECT ON thing_models TO linkflow_read;
+GRANT SELECT, INSERT, UPDATE, DELETE ON devices TO linkflow_app;
+GRANT SELECT ON devices TO linkflow_read;
+GRANT SELECT, INSERT ON device_data TO linkflow_app;
+GRANT SELECT ON device_data TO linkflow_read;
+
+-- ============ Modules Table (功能模块) ============
+CREATE TABLE IF NOT EXISTS modules (
+    id VARCHAR(32) PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    description TEXT,
+    config_schema JSONB NOT NULL DEFAULT '{}',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+DROP TRIGGER IF EXISTS modules_updated_at ON modules;
+CREATE TRIGGER modules_updated_at
+    BEFORE UPDATE ON modules
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at();
+
+-- 物模型新增 modules 字段
+ALTER TABLE thing_models ADD COLUMN IF NOT EXISTS modules JSONB NOT NULL DEFAULT '[]';
+
+-- 插入内置语音模块
+INSERT INTO modules (id, name, description, config_schema) VALUES (
+    'voice',
+    '语音控制模块',
+    '支持设备端语音识别后上报文本指令，平台解析并路由到目标设备执行操作。',
+    '{
+        "exposed_properties": {
+            "type": "array",
+            "description": "对语音开放的属性ID列表（仅rw属性有效）",
+            "items": { "type": "string" }
+        },
+        "exposed_services": {
+            "type": "array",
+            "description": "对语音开放的服务ID列表",
+            "items": { "type": "string" }
+        }
+    }'
+) ON CONFLICT (id) DO NOTHING;
+
+GRANT SELECT ON modules TO linkflow_app;
+GRANT SELECT ON modules TO linkflow_read;
+
+-- Done
+SELECT 'LinkFlow database initialized successfully!' AS status;

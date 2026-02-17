@@ -1,0 +1,208 @@
+package handler
+
+import (
+	"context"
+	"net/http"
+	"strconv"
+
+	"github.com/gin-gonic/gin"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/ldchengyi/linkflow/internal/cache"
+	"github.com/ldchengyi/linkflow/internal/database"
+	"github.com/ldchengyi/linkflow/internal/logger"
+	"github.com/ldchengyi/linkflow/internal/model"
+	"github.com/ldchengyi/linkflow/internal/repository"
+)
+
+type DeviceHandler struct {
+	repo     *repository.DeviceRepository
+	dataRepo *repository.DeviceDataRepository
+	pool     *pgxpool.Pool
+	rdb      *cache.Redis
+}
+
+func NewDeviceHandler(repo *repository.DeviceRepository, dataRepo *repository.DeviceDataRepository, pool *pgxpool.Pool, rdb *cache.Redis) *DeviceHandler {
+	return &DeviceHandler{repo: repo, dataRepo: dataRepo, pool: pool, rdb: rdb}
+}
+
+func (h *DeviceHandler) withRLS(c *gin.Context) (context.Context, error) {
+	userID := c.GetString("user_id")
+	var userRole string
+	if role, exists := c.Get("user_role"); exists {
+		userRole = string(role.(model.UserRole))
+	}
+	return database.WithRLS(c.Request.Context(), h.pool, userID, userRole)
+}
+
+// mergeOnlineStatus 用 Redis 实时状态覆写设备的 Status 字段
+func (h *DeviceHandler) mergeOnlineStatus(ctx context.Context, devices []*model.Device) {
+	ids := make([]string, len(devices))
+	for i, d := range devices {
+		ids[i] = d.ID
+	}
+	statusMap, err := h.rdb.BatchCheckOnline(ctx, ids)
+	if err != nil {
+		logger.Log.Errorf("Failed to batch check online status: %v", err)
+		return // 降级使用 PG 状态
+	}
+	for _, d := range devices {
+		if statusMap[d.ID] {
+			d.Status = "online"
+		} else {
+			d.Status = "offline"
+		}
+	}
+}
+
+// Create 创建设备
+func (h *DeviceHandler) Create(c *gin.Context) {
+	var req model.CreateDeviceRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		Fail(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	userID := c.GetString("user_id")
+
+	ctx, err := h.withRLS(c)
+	if err != nil {
+		logger.Log.Errorf("Failed to set RLS context: %v", err)
+		Fail(c, http.StatusInternalServerError, "database error")
+		return
+	}
+	defer database.ReleaseRLSConn(ctx)
+
+	device, err := h.repo.Create(ctx, userID, &req)
+	if err != nil {
+		logger.Log.Errorf("Failed to create device: %v", err)
+		Fail(c, http.StatusInternalServerError, "failed to create device")
+		return
+	}
+
+	Created(c, device)
+}
+
+// Get 获取设备详情
+func (h *DeviceHandler) Get(c *gin.Context) {
+	ctx, err := h.withRLS(c)
+	if err != nil {
+		Fail(c, http.StatusInternalServerError, "database error")
+		return
+	}
+	defer database.ReleaseRLSConn(ctx)
+
+	id := c.Param("id")
+	device, err := h.repo.GetByID(ctx, id)
+	if err != nil {
+		Fail(c, http.StatusNotFound, "device not found")
+		return
+	}
+
+	// 合并 Redis 实时在线状态
+	h.mergeOnlineStatus(c.Request.Context(), []*model.Device{device})
+
+	Success(c, device)
+}
+
+// List 获取设备列表
+func (h *DeviceHandler) List(c *gin.Context) {
+	ctx, err := h.withRLS(c)
+	if err != nil {
+		Fail(c, http.StatusInternalServerError, "database error")
+		return
+	}
+	defer database.ReleaseRLSConn(ctx)
+
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
+
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 10
+	}
+
+	offset := (page - 1) * pageSize
+	devices, total, err := h.repo.List(ctx, offset, pageSize)
+	if err != nil {
+		Fail(c, http.StatusInternalServerError, "failed to list devices")
+		return
+	}
+
+	// 合并 Redis 实时在线状态
+	h.mergeOnlineStatus(c.Request.Context(), devices)
+
+	Page(c, devices, total, page, pageSize)
+}
+
+// Update 更新设备
+func (h *DeviceHandler) Update(c *gin.Context) {
+	ctx, err := h.withRLS(c)
+	if err != nil {
+		Fail(c, http.StatusInternalServerError, "database error")
+		return
+	}
+	defer database.ReleaseRLSConn(ctx)
+
+	id := c.Param("id")
+	var req model.UpdateDeviceRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		Fail(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	device, err := h.repo.Update(ctx, id, &req)
+	if err != nil {
+		Fail(c, http.StatusInternalServerError, "failed to update device")
+		return
+	}
+
+	Success(c, device)
+}
+
+// Delete 删除设备
+func (h *DeviceHandler) Delete(c *gin.Context) {
+	ctx, err := h.withRLS(c)
+	if err != nil {
+		Fail(c, http.StatusInternalServerError, "database error")
+		return
+	}
+	defer database.ReleaseRLSConn(ctx)
+
+	id := c.Param("id")
+	if err := h.repo.Delete(ctx, id); err != nil {
+		Fail(c, http.StatusInternalServerError, "failed to delete device")
+		return
+	}
+
+	Success(c, nil)
+}
+
+// LatestData 获取设备最新遥测数据
+func (h *DeviceHandler) LatestData(c *gin.Context) {
+	ctx, err := h.withRLS(c)
+	if err != nil {
+		Fail(c, http.StatusInternalServerError, "database error")
+		return
+	}
+	defer database.ReleaseRLSConn(ctx)
+
+	id := c.Param("id")
+
+	// 先验证设备存在且属于当前用户（RLS 会过滤）
+	_, err = h.repo.GetByID(ctx, id)
+	if err != nil {
+		Fail(c, http.StatusNotFound, "device not found")
+		return
+	}
+
+	data, err := h.dataRepo.GetLatestData(ctx, id)
+	if err != nil {
+		logger.Log.Errorf("Failed to get latest data for device %s: %v", id, err)
+		Fail(c, http.StatusInternalServerError, "failed to get latest data")
+		return
+	}
+
+	Success(c, data)
+}

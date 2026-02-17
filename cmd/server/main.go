@@ -1,0 +1,184 @@
+package main
+
+import (
+	"context"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/ldchengyi/linkflow/internal/cache"
+	"github.com/ldchengyi/linkflow/internal/config"
+	"github.com/ldchengyi/linkflow/internal/database"
+	"github.com/ldchengyi/linkflow/internal/handler"
+	"github.com/ldchengyi/linkflow/internal/logger"
+	"github.com/ldchengyi/linkflow/internal/middleware"
+	mqttbroker "github.com/ldchengyi/linkflow/internal/mqtt"
+	"github.com/ldchengyi/linkflow/internal/repository"
+	"github.com/ldchengyi/linkflow/internal/service"
+)
+
+func main() {
+	// 加载配置
+	cfg, err := config.Load()
+	if err != nil {
+		panic("Failed to load config: " + err.Error())
+	}
+
+	// 初始化日志
+	if err := logger.Init(logger.Config{
+		Level:      cfg.Log.Level,
+		Filename:   cfg.Log.Filename,
+		MaxSize:    cfg.Log.MaxSize,
+		MaxBackups: cfg.Log.MaxBackups,
+		MaxAge:     cfg.Log.MaxAge,
+		Compress:   cfg.Log.Compress,
+	}); err != nil {
+		panic("Failed to init logger: " + err.Error())
+	}
+	defer logger.Sync()
+
+	// 初始化数据库连接池
+	ctx := context.Background()
+	db, err := database.New(ctx, cfg.Database)
+	if err != nil {
+		logger.Log.Fatalf("Failed to connect database: %v", err)
+	}
+	defer db.Close()
+	logger.Log.Info("Database connected")
+
+	// 初始化 Redis
+	rdb, err := cache.NewRedis(cfg.Redis.Addr, cfg.Redis.Password, cfg.Redis.DB)
+	if err != nil {
+		logger.Log.Fatalf("Failed to connect redis: %v", err)
+	}
+	defer rdb.Close()
+	logger.Log.Info("Redis connected")
+
+	// 初始化服务
+	userRepo := repository.NewUserRepository(db.App())
+	thingModelRepo := repository.NewThingModelRepository(db.App())
+	jwtService := service.NewJWTService(cfg.JWT.Secret, cfg.JWT.ExpireHours, rdb)
+	authService := service.NewAuthService(userRepo, jwtService)
+
+	deviceRepo := repository.NewDeviceRepository(db.App())
+	deviceDataRepoApp := repository.NewDeviceDataRepository(db.App())
+	moduleRepo := repository.NewModuleRepository(db.App())
+
+	// MQTT 专用 Repository（使用 Admin pool 绕过 RLS）
+	mqttDeviceRepo := repository.NewDeviceRepository(db.Admin())
+	mqttThingModelRepo := repository.NewThingModelRepository(db.Admin())
+	deviceDataRepo := repository.NewDeviceDataRepository(db.Admin())
+
+	// 初始化 MQTT Broker
+	broker := mqttbroker.NewBroker(cfg.MQTT, mqttDeviceRepo, mqttThingModelRepo, deviceDataRepo, rdb)
+	if err := broker.Start(); err != nil {
+		logger.Log.Fatalf("Failed to start MQTT broker: %v", err)
+	}
+	logger.Log.Info("MQTT broker started")
+
+	// 初始化 Handler
+	authHandler := handler.NewAuthHandler(authService)
+	thingModelHandler := handler.NewThingModelHandler(thingModelRepo, db.App())
+	deviceHandler := handler.NewDeviceHandler(deviceRepo, deviceDataRepoApp, db.App(), rdb)
+	statsHandler := handler.NewStatsHandler(deviceRepo, thingModelRepo, db.App(), rdb)
+	moduleHandler := handler.NewModuleHandler(moduleRepo)
+
+	// 设置路由
+	router := gin.Default()
+
+	// 健康检查
+	router.GET("/health", func(c *gin.Context) {
+		c.JSON(http.StatusOK, handler.Response{Code: 200, Msg: "success", Data: gin.H{"status": "ok"}})
+	})
+
+	// API 路由
+	api := router.Group("/api")
+	{
+		// 公开路由
+		auth := api.Group("/auth")
+		{
+			auth.POST("/register", authHandler.Register)
+			auth.POST("/login", authHandler.Login)
+		}
+
+		// 需要认证的路由
+		protected := api.Group("")
+		protected.Use(middleware.Auth(jwtService))
+		{
+			protected.POST("/auth/logout", authHandler.Logout)
+			protected.GET("/me", func(c *gin.Context) {
+				c.JSON(http.StatusOK, handler.Response{Code: 200, Msg: "success", Data: gin.H{
+					"user_id": middleware.GetUserID(c),
+					"role":    middleware.GetUserRole(c),
+				}})
+			})
+
+			// 物模型路由
+			thingModels := protected.Group("/thing-models")
+			{
+				thingModels.POST("", thingModelHandler.Create)
+				thingModels.GET("", thingModelHandler.List)
+				thingModels.GET("/:id", thingModelHandler.Get)
+				thingModels.PUT("/:id", thingModelHandler.Update)
+				thingModels.DELETE("/:id", thingModelHandler.Delete)
+			}
+
+			// 设备路由
+			devices := protected.Group("/devices")
+			{
+				devices.POST("", deviceHandler.Create)
+				devices.GET("", deviceHandler.List)
+				devices.GET("/:id", deviceHandler.Get)
+				devices.GET("/:id/data/latest", deviceHandler.LatestData)
+				devices.PUT("/:id", deviceHandler.Update)
+				devices.DELETE("/:id", deviceHandler.Delete)
+			}
+
+			// 统计路由
+			protected.GET("/stats/overview", statsHandler.Overview)
+
+			// 模块路由
+			modules := protected.Group("/modules")
+			{
+				modules.GET("", moduleHandler.List)
+				modules.GET("/:id", moduleHandler.Get)
+			}
+		}
+	}
+
+	// 启动服务器
+	srv := &http.Server{
+		Addr:    ":" + cfg.Server.Port,
+		Handler: router,
+	}
+
+	go func() {
+		logger.Log.Infof("Server starting on port %s", cfg.Server.Port)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Log.Fatalf("Server failed: %v", err)
+		}
+	}()
+
+	// 优雅关闭
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+
+	logger.Log.Info("Shutting down server...")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// 先停 MQTT broker
+	if err := broker.Stop(ctx); err != nil {
+		logger.Log.Errorf("MQTT broker shutdown error: %v", err)
+	}
+
+	if err := srv.Shutdown(ctx); err != nil {
+		logger.Log.Fatalf("Server forced to shutdown: %v", err)
+	}
+
+	logger.Log.Info("Server exited")
+}

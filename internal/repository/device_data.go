@@ -1,0 +1,86 @@
+package repository
+
+import (
+	"context"
+	"encoding/json"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/ldchengyi/linkflow/internal/database"
+)
+
+type DeviceDataRepository struct {
+	pool *pgxpool.Pool
+}
+
+func NewDeviceDataRepository(pool *pgxpool.Pool) *DeviceDataRepository {
+	return &DeviceDataRepository{pool: pool}
+}
+
+func (r *DeviceDataRepository) queryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	if conn := database.RLSConn(ctx); conn != nil {
+		return conn.QueryRow(ctx, sql, args...)
+	}
+	return r.pool.QueryRow(ctx, sql, args...)
+}
+
+// InsertTelemetry 插入遥测数据
+func (r *DeviceDataRepository) InsertTelemetry(ctx context.Context, deviceID, userID, topic string, payload map[string]interface{}, qos byte, valid bool, errors map[string]string) error {
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	var errorsJSON []byte
+	if len(errors) > 0 {
+		errorsJSON, _ = json.Marshal(errors)
+	}
+
+	_, err = r.pool.Exec(ctx, `
+		INSERT INTO device_data (time, device_id, user_id, topic, payload, qos, valid, errors)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	`, time.Now(), deviceID, userID, topic, payloadJSON, qos, valid, errorsJSON)
+	return err
+}
+
+// DeviceLatestData 设备最新遥测数据
+type DeviceLatestData struct {
+	Time    time.Time              `json:"time"`
+	Payload map[string]interface{} `json:"payload"`
+	Valid   bool                   `json:"valid"`
+	Errors  map[string]string      `json:"errors,omitempty"`
+}
+
+// GetLatestData 获取设备最新一条遥测数据
+func (r *DeviceDataRepository) GetLatestData(ctx context.Context, deviceID string) (*DeviceLatestData, error) {
+	var (
+		t          time.Time
+		payloadRaw []byte
+		valid      bool
+		errorsRaw  []byte
+	)
+
+	err := r.queryRow(ctx, `
+		SELECT time, payload, valid, errors
+		FROM device_data
+		WHERE device_id = $1
+		ORDER BY time DESC
+		LIMIT 1
+	`, deviceID).Scan(&t, &payloadRaw, &valid, &errorsRaw)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	data := &DeviceLatestData{Time: t, Valid: valid}
+	if err := json.Unmarshal(payloadRaw, &data.Payload); err != nil {
+		return nil, err
+	}
+	if errorsRaw != nil {
+		json.Unmarshal(errorsRaw, &data.Errors)
+	}
+	return data, nil
+}
