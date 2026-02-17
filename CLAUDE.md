@@ -78,26 +78,34 @@ linkflow/
 │   │   ├── thing_model.go          # 物模型处理器
 │   │   ├── device.go               # 设备处理器
 │   │   ├── module.go               # 功能模块处理器
-│   │   └── stats.go                # 仪表盘统计处理器
+│   │   ├── stats.go                # 仪表盘统计处理器
+│   │   ├── ws.go                   # WebSocket 升级处理器
+│   │   ├── alert_rule.go           # 告警规则 CRUD 处理器
+│   │   └── alert_log.go            # 告警日志查询处理器
 │   ├── logger/logger.go            # zap 日志封装
 │   ├── middleware/auth.go          # JWT 认证中间件
 │   ├── mqtt/
-│   │   ├── broker.go               # MQTT Broker 生命周期
-│   │   ├── auth.go                 # 设备认证 + ACL
-│   │   ├── hooks.go                # 连接管理 + 消息处理
+│   │   ├── broker.go               # MQTT Broker 生命周期 + WS推送 + 告警缓存
+│   │   ├── auth.go                 # 设备认证 + ACL + 上线WS推送
+│   │   ├── hooks.go                # 连接管理 + 消息处理 + 告警评估
 │   │   ├── validator.go            # 物模型属性校验器
 │   │   └── voice.go                # 语音指令处理器（本地 NLP）
+│   ├── ws/
+│   │   └── hub.go                  # WebSocket Hub + Client 管理
 │   ├── model/
 │   │   ├── user.go                 # 用户模型
 │   │   ├── thing_model.go          # 物模型（属性/事件/服务/模块）
 │   │   ├── device.go               # 设备模型
-│   │   └── module.go               # 功能模块模型 + 语音指令结构
+│   │   ├── module.go               # 功能模块模型 + 语音指令结构
+│   │   └── alert.go                # 告警规则 + 告警日志模型
 │   ├── repository/
 │   │   ├── user.go                 # 用户数据访问
 │   │   ├── thing_model.go          # 物模型数据访问
 │   │   ├── device.go               # 设备数据访问
 │   │   ├── device_data.go          # 遥测数据存储 + 查询
-│   │   └── module.go               # 功能模块数据访问
+│   │   ├── module.go               # 功能模块数据访问
+│   │   ├── alert_rule.go           # 告警规则数据访问
+│   │   └── alert_log.go            # 告警日志数据访问
 │   └── service/
 │       ├── auth.go                 # 认证业务逻辑
 │       └── jwt.go                  # JWT + Redis 校验
@@ -106,20 +114,26 @@ linkflow/
 │   ├── 002_users_table.sql         # 用户表
 │   ├── 003_devices_table_rls.sql   # 设备表 + RLS 策略
 │   ├── 004_device_data_hypertable.sql # 遥测数据时序表
-│   └── 005_modules.sql             # 功能模块表 + 物模型 modules 字段
+│   ├── 005_modules.sql             # 功能模块表 + 物模型 modules 字段
+│   └── 007_alert_system.sql        # 告警规则表 + 告警日志表 + RLS
 ├── web/                             # 前端项目
 │   ├── src/
 │   │   ├── api/index.ts            # Axios API 客户端
 │   │   ├── components/ui/          # shadcn/ui 组件
+│   │   ├── hooks/
+│   │   │   └── useWebSocket.ts     # WebSocket hook（连接/重连/消息分发）
 │   │   ├── pages/
 │   │   │   ├── Login.tsx           # 登录/注册页
-│   │   │   ├── Dashboard.tsx       # 仪表盘（侧边栏布局）
+│   │   │   ├── Dashboard.tsx       # 仪表盘（侧边栏 + WS连接 + 全局事件总线）
 │   │   │   ├── ThingModelList.tsx  # 物模型列表
 │   │   │   ├── ThingModelForm.tsx  # 物模型创建/编辑（含模块配置）
-│   │   │   ├── DeviceList.tsx      # 设备列表
+│   │   │   ├── DeviceList.tsx      # 设备列表（实时状态更新）
 │   │   │   ├── DeviceForm.tsx      # 设备创建/编辑
-│   │   │   ├── DeviceData.tsx      # 设备数据查看（属性/物模型/接口详情）
-│   │   │   └── ModuleList.tsx      # 功能模块列表
+│   │   │   ├── DeviceData.tsx      # 设备数据查看（实时遥测更新）
+│   │   │   ├── ModuleList.tsx      # 功能模块列表
+│   │   │   ├── AlertRuleList.tsx   # 告警规则管理
+│   │   │   ├── AlertRuleForm.tsx   # 告警规则创建/编辑
+│   │   │   └── AlertLogList.tsx    # 告警历史（实时新告警推送）
 │   │   ├── App.tsx                 # 路由配置
 │   │   └── main.tsx                # 入口文件
 │   ├── Dockerfile                   # 前端镜像（Nginx）
@@ -162,7 +176,7 @@ linkflow/
    - React 18 + TypeScript + shadcn/ui
    - 登录/注册页面（深色主题）
    - 仪表盘（可折叠侧边栏 + 顶部用户菜单）
-   - 导航：仪表盘 / 物模型 / 设备管理 / 设备数据 / 功能模块
+   - 导航：仪表盘 / 物模型 / 设备管理 / 设备数据 / 功能模块 / 告警规则 / 告警历史
    - Nginx 反向代理（80 端口）
    - `/api/*` 请求转发至后端
 
@@ -217,6 +231,26 @@ linkflow/
     - 执行结果通过 `voice/down` topic 回传
     - 属性设置时同步写入 device_data（合并已有属性）
 
+12. **WebSocket 实时推送**
+    - 全局 Hub 管理所有 WebSocket 连接，按 `userID` 分组
+    - 连接入口: `GET /api/ws?token=JWT`，JWT query param 认证
+    - 心跳: 30s ping / 60s pong timeout
+    - 消息格式: `{ "type": "telemetry|device_status|alert|stats", "data": {...} }`
+    - 推送触发点：设备上线/离线（device_status + stats）、遥测上报（telemetry）、告警触发（alert）
+    - 前端全局事件总线：Dashboard 建立 WS 连接，子页面通过 `onWSMessage()` 订阅
+    - 自动重连（指数退避 3s→30s）
+    - Nginx WebSocket 代理配置（Upgrade + Connection headers）
+
+13. **告警系统**
+    - 阈值告警规则：属性值 > / >= / < / <= / == / != 阈值时触发
+    - 告警级别：info / warning / critical
+    - 规则 CRUD + RLS 行级安全
+    - 规则缓存：Broker `sync.Map`，CRUD 操作时失效，下次遥测时重新加载
+    - 评估位置：`OnPublished` hook 中，数据存储后评估规则
+    - 触发后：写入 `alert_logs` + WebSocket 推送 `alert` 消息
+    - 前端：规则管理页（CRUD）+ 告警历史页（实时新告警插入）
+    - 设备筛选：规则列表和告警历史均支持按设备筛选（下拉选择设备或查看全部）
+
 ------
 
 ## API 端点
@@ -242,6 +276,13 @@ linkflow/
 | GET    | /api/modules                | 功能模块列表       | 是   |
 | GET    | /api/modules/:id            | 功能模块详情       | 是   |
 | GET    | /api/stats/overview         | 仪表盘统计概览     | 是   |
+| GET    | /api/ws?token=JWT           | WebSocket 连接     | 是(query) |
+| POST   | /api/alert-rules            | 创建告警规则       | 是   |
+| GET    | /api/alert-rules            | 告警规则列表（?device_id 筛选） | 是   |
+| GET    | /api/alert-rules/:id        | 告警规则详情       | 是   |
+| PUT    | /api/alert-rules/:id        | 更新告警规则       | 是   |
+| DELETE | /api/alert-rules/:id        | 删除告警规则       | 是   |
+| GET    | /api/alert-logs             | 告警历史（?device_id 筛选） | 是   |
 
 ------
 
@@ -283,12 +324,12 @@ docker-compose logs -f web
 - [x] MQTT 数据接入（Mochi MQTT 内嵌 Broker）
 - [x] TimescaleDB 时序存储（device_data hypertable）
 - [x] 设备数据查看页面（最新数据 + 物模型详情 + 接口详情）
-- [ ] WebSocket 实时推送
+- [x] WebSocket 实时推送
 
 ### 第三阶段：业务增强
 - [x] 功能模块系统（平台级模块 + 物模型绑定）
 - [x] 语音控制（本地关键词匹配 NLP，通过 MQTT voice topic）
-- [ ] 告警系统（阈值规则、通知）
+- [x] 告警系统（阈值规则 + WebSocket 通知 + 告警历史）
 - [ ] 视频接入（RTMP）
 
 ------
@@ -329,9 +370,9 @@ devices/{device_id}/voice/down        # 语音执行结果回传（设备 SUB）
 4. 结果通过 `voice/down` 回传：`{"success": true, "message": "指令已执行", "action": "..."}`
 
 ### 关键文件
-- `internal/mqtt/broker.go` — Broker 生命周期管理 + Publish 方法
-- `internal/mqtt/auth.go` — 认证 + ACL Hook
-- `internal/mqtt/hooks.go` — 连接管理 + 消息处理 Hook（分发 telemetry/event/voice）
+- `internal/mqtt/broker.go` — Broker 生命周期管理 + Publish 方法 + WS推送 + 告警规则缓存
+- `internal/mqtt/auth.go` — 认证 + ACL Hook + 上线WS推送
+- `internal/mqtt/hooks.go` — 连接管理 + 消息处理 Hook（分发 telemetry/event/voice）+ 告警评估
 - `internal/mqtt/validator.go` — 物模型属性校验器
 - `internal/mqtt/voice.go` — 语音指令处理器（意图解析 + 执行 + 相对值计算）
 
@@ -385,6 +426,75 @@ devices/{device_id}/voice/down        # 语音执行结果回传（设备 SUB）
 
 ------
 
+## WebSocket 实时推送
+
+### 架构
+- 全局 Hub 管理所有连接，按 `userID` 分组（一个用户可多个连接）
+- gorilla/websocket 实现，readPump/writePump 双协程模式
+- 连接入口: `GET /api/ws?token=JWT`，JWT 通过 query param 认证
+- 心跳: 30s ping，60s pong timeout
+- 消息格式: `{ "type": "telemetry|device_status|alert|stats", "data": {...} }`
+
+### 推送触发点
+| 事件 | 推送类型 | 触发位置 |
+|------|---------|---------|
+| 设备上报遥测 | `telemetry` | hooks.go OnPublished |
+| 设备上线 | `device_status` + `stats` | auth.go OnConnectAuthenticate |
+| 设备离线 | `device_status` + `stats` | hooks.go OnDisconnect |
+| 告警触发 | `alert` | hooks.go checkAlertRules |
+
+### 前端集成
+- `useWebSocket` hook：自动连接/重连（指数退避 3s→30s）
+- Dashboard 建立全局 WS 连接，通过 `onWSMessage()` 事件总线分发给子页面
+- DeviceList：实时更新设备在线状态
+- DeviceData：实时更新属性卡片数据
+- AlertLogList：新告警实时插入列表顶部
+- Dashboard：统计卡片实时更新 + 告警 toast 通知
+
+### 关键文件
+- `internal/ws/hub.go` — Hub + Client + readPump/writePump + SendToUser
+- `internal/handler/ws.go` — WebSocket 升级 handler（JWT query param 认证）
+- `web/src/hooks/useWebSocket.ts` — React WS hook
+- `web/src/pages/Dashboard.tsx` — 全局 WS 连接 + 事件总线（`onWSMessage`）
+- `web/nginx.conf.template` — WebSocket 代理配置（Upgrade headers + 3600s timeout）
+
+------
+
+## 告警系统
+
+### 架构
+- 阈值告警：属性值与阈值比较（> / >= / < / <= / == / !=）
+- 告警级别：info / warning / critical
+- 规则缓存：Broker `alertRules` sync.Map，key 为 deviceID
+- 缓存失效：告警规则 CRUD 时通过 `AlertRuleBrokerInvalidator` 接口清除
+- 评估位置：`OnPublished` hook 中，遥测数据存储后评估
+
+### 数据流
+1. 设备上报遥测 → hooks.go 存储数据
+2. `checkAlertRules()` 加载规则（优先缓存，miss 时查 DB）
+3. 遍历规则，比较属性值与阈值
+4. 触发时：写入 `alert_logs` + WebSocket 推送 `alert` 消息
+
+### 数据库表
+```sql
+-- alert_rules: 用户定义的告警规则
+alert_rules (id UUID PK, user_id, name, device_id, model_id, property_id, operator, threshold, severity, enabled, created_at, updated_at)
+
+-- alert_logs: 触发的告警记录
+alert_logs (id BIGSERIAL PK, rule_id, user_id, device_id, device_name, property_id, property_name, operator, threshold, actual_value, severity, rule_name, created_at)
+```
+
+### 关键文件
+- `internal/model/alert.go` — AlertRule + AlertLog 模型
+- `internal/repository/alert_rule.go` — 规则 CRUD + `ListEnabledByDeviceID`（绕过 RLS）
+- `internal/repository/alert_log.go` — 日志写入（绕过 RLS）+ 查询（RLS）
+- `internal/handler/alert_rule.go` — 规则 CRUD handler + Broker 缓存失效
+- `internal/handler/alert_log.go` — 日志查询 handler
+- `internal/mqtt/hooks.go` — `checkAlertRules()` 告警评估方法
+- `migrations/007_alert_system.sql` — 表结构 + RLS + 索引
+
+------
+
 ## 开发规范
 
 - 不使用 ORM，手写 SQL
@@ -393,9 +503,11 @@ devices/{device_id}/voice/down        # 语音执行结果回传（设备 SUB）
 - 配置通过 `.env` 环境变量
 - 数据库迁移脚本放 `migrations/`
 - RLS 会话变量通过 `database.WithRLS()` 设置（`set_config` 第三参数为 `false`，会话级别）
+- RLS 策略中必须使用 `current_setting('app.current_user_id', true)`，注意变量名是 `app.current_user_id`（非 `app.user_id`）
 - RLS 连接用完后必须调用 `database.ReleaseRLSConn(ctx)` 释放
 - MQTT 相关 Repository 使用 `db.Admin()` 绕过 RLS（设备认证/语音处理时无用户上下文）
 - Repository 中通过 `queryRow`/`query`/`exec` 方法自动判断使用 RLS 连接还是 pool
 - 前端 UI 组件使用 shadcn/ui，样式使用 Tailwind CSS
 - 前端通知使用 sonner（`toast.success/error`）
-- Broker 内部缓存：`devices` sync.Map 缓存已连接设备信息，`models` sync.Map 缓存物模型属性
+- Broker 内部缓存：`devices` sync.Map 缓存已连接设备信息，`models` sync.Map 缓存物模型属性，`alertRules` sync.Map 缓存告警规则
+- WebSocket Hub 通过 `SendToUser(userID, msg)` 推送消息，Broker 持有 Hub 引用

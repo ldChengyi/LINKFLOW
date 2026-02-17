@@ -3,6 +3,7 @@ import { toast } from 'sonner';
 import { Activity, RefreshCw, Copy, Check, Mic, Blocks } from 'lucide-react';
 import { deviceApi, thingModelApi } from '../api';
 import type { Device, ThingModel, DeviceLatestData, Property } from '../api';
+import { onWSMessage } from './Dashboard';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -75,6 +76,20 @@ export default function DeviceData() {
       setRefreshing(false);
     }
   };
+
+  // 实时遥测数据更新
+  useEffect(() => {
+    return onWSMessage((msg) => {
+      if (msg.type === 'telemetry' && msg.data.device_id === selectedId) {
+        setLatestData({
+          time: msg.data.time,
+          payload: msg.data.payload,
+          valid: msg.data.valid,
+          errors: msg.data.errors,
+        });
+      }
+    });
+  }, [selectedId]);
 
   const properties = thingModel?.properties || [];
 

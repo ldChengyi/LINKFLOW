@@ -190,6 +190,10 @@ export default function ThingModelForm() {
     }
     const prop = propForm as Property;
     if (editingProp) {
+      if (prop.id !== editingProp.id && properties.some((p) => p.id === prop.id)) {
+        toast.error('属性标识符已存在');
+        return;
+      }
       setProperties(properties.map((p) => (p.id === editingProp.id ? prop : p)));
     } else {
       if (properties.some((p) => p.id === prop.id)) {
@@ -219,6 +223,10 @@ export default function ThingModelForm() {
     }
     const ev: Event = { id: eventFormData.id, name: eventFormData.name, params: eventFormData.params };
     if (editingEvent) {
+      if (ev.id !== editingEvent.id && events.some((e) => e.id === ev.id)) {
+        toast.error('事件标识符已存在');
+        return;
+      }
       setEvents(events.map((e) => (e.id === editingEvent.id ? ev : e)));
     } else {
       if (events.some((e) => e.id === ev.id)) {
@@ -258,6 +266,10 @@ export default function ThingModelForm() {
       outputParams: serviceFormData.outputParams,
     };
     if (editingService) {
+      if (svc.id !== editingService.id && services.some((s) => s.id === svc.id)) {
+        toast.error('服务标识符已存在');
+        return;
+      }
       setServices(services.map((s) => (s.id === editingService.id ? svc : s)));
     } else {
       if (services.some((s) => s.id === svc.id)) {
@@ -567,7 +579,7 @@ export default function ThingModelForm() {
           <div className="space-y-4">
             <div className="space-y-2">
               <Label>标识符 *</Label>
-              <Input placeholder="如：temperature" disabled={!!editingProp} value={propForm.id || ''} onChange={(e) => setPropForm({ ...propForm, id: e.target.value })} />
+              <Input placeholder="如：temperature" value={propForm.id || ''} onChange={(e) => setPropForm({ ...propForm, id: e.target.value })} />
             </div>
             <div className="space-y-2">
               <Label>名称 *</Label>
@@ -626,7 +638,7 @@ export default function ThingModelForm() {
           <div className="space-y-4">
             <div className="space-y-2">
               <Label>标识符 *</Label>
-              <Input placeholder="如：high_temp_alarm" disabled={!!editingEvent} value={eventFormData.id} onChange={(e) => setEventFormData({ ...eventFormData, id: e.target.value })} />
+              <Input placeholder="如：high_temp_alarm" value={eventFormData.id} onChange={(e) => setEventFormData({ ...eventFormData, id: e.target.value })} />
             </div>
             <div className="space-y-2">
               <Label>名称 *</Label>
@@ -653,7 +665,7 @@ export default function ThingModelForm() {
           <div className="space-y-4">
             <div className="space-y-2">
               <Label>标识符 *</Label>
-              <Input placeholder="如：calibrate" disabled={!!editingService} value={serviceFormData.id} onChange={(e) => setServiceFormData({ ...serviceFormData, id: e.target.value })} />
+              <Input placeholder="如：calibrate" value={serviceFormData.id} onChange={(e) => setServiceFormData({ ...serviceFormData, id: e.target.value })} />
             </div>
             <div className="space-y-2">
               <Label>名称 *</Label>

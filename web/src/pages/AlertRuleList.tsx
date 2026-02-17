@@ -1,10 +1,9 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
-import { Plus, Pencil, Trash2 } from 'lucide-react';
-import { deviceApi } from '../api';
-import type { Device } from '../api';
-import { onWSMessage } from './Dashboard';
+import { Plus, Pencil, Trash2, Bell } from 'lucide-react';
+import { alertRuleApi, deviceApi } from '../api';
+import type { AlertRule, Device } from '../api';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -14,47 +13,62 @@ import {
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogClose,
 } from '@/components/ui/dialog';
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from '@/components/ui/select';
 
-export default function DeviceList() {
+const severityColors: Record<string, string> = {
+  critical: 'destructive',
+  warning: 'warning',
+  info: 'secondary',
+};
+
+const severityLabels: Record<string, string> = {
+  critical: '严重',
+  warning: '警告',
+  info: '信息',
+};
+
+export default function AlertRuleList() {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
-  const [data, setData] = useState<Device[]>([]);
+  const [data, setData] = useState<AlertRule[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [pageSize] = useState(10);
-  const [deleteTarget, setDeleteTarget] = useState<Device | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<AlertRule | null>(null);
+  const [devices, setDevices] = useState<Device[]>([]);
+  const [filterDeviceId, setFilterDeviceId] = useState('');
+
+  useEffect(() => {
+    deviceApi.list(1, 100).then((res) => setDevices(res.data.list || [])).catch(() => {});
+  }, []);
 
   const fetchData = async () => {
     setLoading(true);
     try {
-      const res = await deviceApi.list(page, pageSize);
+      const res = await alertRuleApi.list(page, pageSize, filterDeviceId || undefined);
       setData(res.data.list || []);
       setTotal(res.data.total);
     } catch {
-      toast.error('获取设备列表失败');
+      toast.error('获取告警规则失败');
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchData();
-  }, [page, pageSize]);
+    setPage(1);
+  }, [filterDeviceId]);
 
-  // 实时设备状态更新
   useEffect(() => {
-    return onWSMessage((msg) => {
-      if (msg.type === 'device_status') {
-        const { device_id, status } = msg.data;
-        setData((prev) => prev.map((d) => d.id === device_id ? { ...d, status } : d));
-      }
-    });
-  }, []);
+    fetchData();
+  }, [page, pageSize, filterDeviceId]);
 
   const handleDelete = async () => {
     if (!deleteTarget) return;
     try {
-      await deviceApi.delete(deleteTarget.id);
+      await alertRuleApi.delete(deleteTarget.id);
       toast.success('删除成功');
       setDeleteTarget(null);
       fetchData();
@@ -63,31 +77,45 @@ export default function DeviceList() {
     }
   };
 
-  const maskSecret = (secret: string) => {
-    if (secret.length <= 8) return secret;
-    return secret.slice(0, 4) + '****' + secret.slice(-4);
-  };
-
   const totalPages = Math.ceil(total / pageSize);
 
   return (
     <>
       <Card>
         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
-          <CardTitle>设备管理</CardTitle>
-          <Button onClick={() => navigate('/devices/new')}>
+          <div className="flex items-center gap-3">
+            <Bell className="h-5 w-5 text-primary" />
+            <CardTitle>告警规则</CardTitle>
+          </div>
+          <Button onClick={() => navigate('/alert-rules/new')}>
             <Plus className="h-4 w-4" />
-            新建设备
+            新建规则
           </Button>
         </CardHeader>
         <CardContent>
+          <div className="flex items-center gap-3 mb-4">
+            <span className="text-sm text-muted-foreground whitespace-nowrap">筛选设备</span>
+            <Select value={filterDeviceId} onValueChange={(v) => setFilterDeviceId(v === '_all' ? '' : v)}>
+              <SelectTrigger className="w-[220px]">
+                <SelectValue placeholder="全部设备" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="_all">全部设备</SelectItem>
+                {devices.map((d) => (
+                  <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <span className="text-sm text-muted-foreground ml-auto">共 {total} 条</span>
+          </div>
+
           {loading ? (
             <div className="flex items-center justify-center py-20 text-muted-foreground">加载中...</div>
           ) : data.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
-              <p>暂无设备</p>
-              <Button variant="outline" className="mt-4" onClick={() => navigate('/devices/new')}>
-                添加第一个设备
+              <p>暂无告警规则</p>
+              <Button variant="outline" className="mt-4" onClick={() => navigate('/alert-rules/new')}>
+                创建第一条规则
               </Button>
             </div>
           ) : (
@@ -95,44 +123,35 @@ export default function DeviceList() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>名称</TableHead>
-                    <TableHead>绑定物模型</TableHead>
+                    <TableHead>规则名称</TableHead>
+                    <TableHead>设备</TableHead>
+                    <TableHead>属性</TableHead>
+                    <TableHead>条件</TableHead>
+                    <TableHead>级别</TableHead>
                     <TableHead>状态</TableHead>
-                    <TableHead>设备密钥</TableHead>
-                    <TableHead>创建时间</TableHead>
                     <TableHead className="text-right">操作</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {data.map((item) => (
                     <TableRow key={item.id}>
+                      <TableCell className="font-medium">{item.name}</TableCell>
+                      <TableCell>{item.device_name || item.device_id.slice(0, 8)}</TableCell>
+                      <TableCell><code className="text-xs bg-muted px-1.5 py-0.5 rounded">{item.property_id}</code></TableCell>
+                      <TableCell className="font-mono text-sm">{item.operator} {item.threshold}</TableCell>
                       <TableCell>
-                        <button
-                          className="text-primary hover:underline cursor-pointer font-medium"
-                          onClick={() => navigate(`/devices/${item.id}`)}
-                        >
-                          {item.name}
-                        </button>
-                      </TableCell>
-                      <TableCell>
-                        {item.model_name || <span className="text-muted-foreground">未绑定</span>}
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant={item.status === 'online' ? 'success' : 'secondary'}>
-                          {item.status === 'online' ? '在线' : '离线'}
+                        <Badge variant={severityColors[item.severity] as any || 'secondary'}>
+                          {severityLabels[item.severity] || item.severity}
                         </Badge>
                       </TableCell>
                       <TableCell>
-                        <code className="text-xs bg-muted px-2 py-1 rounded font-mono">
-                          {maskSecret(item.device_secret)}
-                        </code>
-                      </TableCell>
-                      <TableCell className="text-muted-foreground text-sm">
-                        {new Date(item.created_at).toLocaleString()}
+                        <Badge variant={item.enabled ? 'success' : 'secondary'}>
+                          {item.enabled ? '启用' : '禁用'}
+                        </Badge>
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex items-center justify-end gap-1">
-                          <Button variant="ghost" size="sm" onClick={() => navigate(`/devices/${item.id}/edit`)}>
+                          <Button variant="ghost" size="sm" onClick={() => navigate(`/alert-rules/${item.id}/edit`)}>
                             <Pencil className="h-4 w-4" />
                           </Button>
                           <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" onClick={() => setDeleteTarget(item)}>
@@ -149,13 +168,9 @@ export default function DeviceList() {
                 <div className="flex items-center justify-between mt-4 pt-4 border-t border-border">
                   <span className="text-sm text-muted-foreground">共 {total} 条</span>
                   <div className="flex items-center gap-2">
-                    <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage(page - 1)}>
-                      上一页
-                    </Button>
+                    <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage(page - 1)}>上一页</Button>
                     <span className="text-sm text-muted-foreground px-2">{page} / {totalPages}</span>
-                    <Button variant="outline" size="sm" disabled={page >= totalPages} onClick={() => setPage(page + 1)}>
-                      下一页
-                    </Button>
+                    <Button variant="outline" size="sm" disabled={page >= totalPages} onClick={() => setPage(page + 1)}>下一页</Button>
                   </div>
                 </div>
               )}
@@ -169,7 +184,7 @@ export default function DeviceList() {
           <DialogHeader>
             <DialogTitle>确认删除</DialogTitle>
             <DialogDescription>
-              确定要删除设备「{deleteTarget?.name}」吗？此操作不可撤销。
+              确定要删除告警规则「{deleteTarget?.name}」吗？此操作不可撤销。
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

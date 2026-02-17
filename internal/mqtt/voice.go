@@ -79,11 +79,11 @@ type voiceIntent struct {
 	Value        interface{}
 }
 
-// parseIntent 从文本中解析意图
+// parseIntent 从文本中解析意图（三层匹配：设备名 → 属性名反向查找 → 模糊匹配）
 func (h *VoiceHandler) parseIntent(ctx context.Context, text string, devices []*model.Device) *voiceIntent {
 	text = strings.TrimSpace(text)
 
-	// 1. 匹配目标设备
+	// 1. 匹配目标设备名（最长匹配）
 	var targetDevice *model.Device
 	var bestMatchLen int
 	for _, d := range devices {
@@ -93,62 +93,46 @@ func (h *VoiceHandler) parseIntent(ctx context.Context, text string, devices []*
 		}
 	}
 
-	if targetDevice == nil {
-		// 如果只有一个设备（除了语音设备本身），默认选它
-		if len(devices) == 2 {
-			for _, d := range devices {
-				if d.ModelID != nil {
-					targetDevice = d
-					break
-				}
-			}
-		}
-		if targetDevice == nil {
-			return nil
+	// 2. 匹配到设备名，在该设备范围内匹配操作
+	if targetDevice != nil {
+		if intent := h.matchAction(ctx, text, targetDevice); intent != nil {
+			return intent
 		}
 	}
 
-	// 2. 获取目标设备的物模型
-	if targetDevice.ModelID == nil {
+	// 3. 设备名未匹配或设备内操作未匹配，通过属性名/服务名反向查找目标设备
+	return h.matchByProperty(ctx, text, devices)
+}
+
+// matchAction 在指定设备上匹配语音操作（属性设置 / Bool开关 / 服务调用）
+func (h *VoiceHandler) matchAction(ctx context.Context, text string, device *model.Device) *voiceIntent {
+	if device.ModelID == nil {
 		return nil
 	}
-
-	tm, err := h.broker.thingModelRepo.GetByID(ctx, *targetDevice.ModelID)
+	tm, err := h.broker.thingModelRepo.GetByID(ctx, *device.ModelID)
 	if err != nil {
 		return nil
 	}
-
-	// 3. 检查物模型是否启用了语音模块
-	var voiceModule *model.ThingModelModule
-	for i, m := range tm.Modules {
-		if m.ID == "voice" {
-			voiceModule = &tm.Modules[i]
-			break
-		}
-	}
-	if voiceModule == nil {
+	vm := getVoiceModule(tm)
+	if vm == nil {
 		return nil
 	}
 
-	// 4. 匹配属性操作
+	// 精确属性名匹配 + 值解析
 	for _, prop := range tm.Properties {
 		if prop.AccessMode != "rw" {
 			continue
 		}
-		if !isExposed(prop.ID, voiceModule.Config.ExposedProperties) {
+		if !isExposed(prop.ID, vm.Config.ExposedProperties) {
 			continue
 		}
-
-		// 尝试匹配属性名
 		if !strings.Contains(text, prop.Name) && !strings.Contains(text, prop.ID) {
 			continue
 		}
-
-		// 根据数据类型解析值
 		value := h.parseValue(text, prop)
 		if value != nil {
 			return &voiceIntent{
-				TargetDevice: targetDevice,
+				TargetDevice: device,
 				ThingModel:   tm,
 				ActionType:   "property_set",
 				PropertyID:   prop.ID,
@@ -157,43 +141,47 @@ func (h *VoiceHandler) parseIntent(ctx context.Context, text string, devices []*
 		}
 	}
 
-	// 5. 尝试 bool 类型的模糊匹配（"打开/关闭" + 设备名）
+	// Bool 模糊匹配：仅当设备只有一个 exposed bool 属性时生效
+	// 多个 bool 时必须指定属性名，避免歧义
+	var exposedBools []model.Property
 	for _, prop := range tm.Properties {
 		if prop.AccessMode != "rw" || prop.DataType != "bool" {
 			continue
 		}
-		if !isExposed(prop.ID, voiceModule.Config.ExposedProperties) {
+		if !isExposed(prop.ID, vm.Config.ExposedProperties) {
 			continue
 		}
-
+		exposedBools = append(exposedBools, prop)
+	}
+	if len(exposedBools) == 1 {
 		if matchBoolOn(text) {
 			return &voiceIntent{
-				TargetDevice: targetDevice,
+				TargetDevice: device,
 				ThingModel:   tm,
 				ActionType:   "property_set",
-				PropertyID:   prop.ID,
+				PropertyID:   exposedBools[0].ID,
 				Value:        true,
 			}
 		}
 		if matchBoolOff(text) {
 			return &voiceIntent{
-				TargetDevice: targetDevice,
+				TargetDevice: device,
 				ThingModel:   tm,
 				ActionType:   "property_set",
-				PropertyID:   prop.ID,
+				PropertyID:   exposedBools[0].ID,
 				Value:        false,
 			}
 		}
 	}
 
-	// 6. 匹配服务调用
+	// 服务匹配
 	for _, svc := range tm.Services {
-		if !isExposed(svc.ID, voiceModule.Config.ExposedServices) {
+		if !isExposed(svc.ID, vm.Config.ExposedServices) {
 			continue
 		}
 		if strings.Contains(text, svc.Name) || strings.Contains(text, svc.ID) {
 			return &voiceIntent{
-				TargetDevice: targetDevice,
+				TargetDevice: device,
 				ThingModel:   tm,
 				ActionType:   "service_invoke",
 				ServiceID:    svc.ID,
@@ -201,6 +189,87 @@ func (h *VoiceHandler) parseIntent(ctx context.Context, text string, devices []*
 		}
 	}
 
+	return nil
+}
+
+// matchByProperty 通过属性名/服务名反向查找目标设备（无需说出设备名）
+func (h *VoiceHandler) matchByProperty(ctx context.Context, text string, devices []*model.Device) *voiceIntent {
+	type candidate struct {
+		device *model.Device
+		tm     *model.ThingModel
+		propID string
+		value  interface{}
+	}
+	var candidates []candidate
+
+	for _, d := range devices {
+		if d.ModelID == nil {
+			continue
+		}
+		tm, err := h.broker.thingModelRepo.GetByID(ctx, *d.ModelID)
+		if err != nil {
+			continue
+		}
+		vm := getVoiceModule(tm)
+		if vm == nil {
+			continue
+		}
+
+		// 通过属性名匹配
+		for _, prop := range tm.Properties {
+			if prop.AccessMode != "rw" {
+				continue
+			}
+			if !isExposed(prop.ID, vm.Config.ExposedProperties) {
+				continue
+			}
+			if !strings.Contains(text, prop.Name) && !strings.Contains(text, prop.ID) {
+				continue
+			}
+			value := h.parseValue(text, prop)
+			if value != nil {
+				candidates = append(candidates, candidate{d, tm, prop.ID, value})
+			}
+		}
+
+		// 通过服务名匹配
+		for _, svc := range tm.Services {
+			if !isExposed(svc.ID, vm.Config.ExposedServices) {
+				continue
+			}
+			if strings.Contains(text, svc.Name) || strings.Contains(text, svc.ID) {
+				return &voiceIntent{
+					TargetDevice: d,
+					ThingModel:   tm,
+					ActionType:   "service_invoke",
+					ServiceID:    svc.ID,
+				}
+			}
+		}
+	}
+
+	// 唯一匹配才执行，多个匹配有歧义则放弃
+	if len(candidates) == 1 {
+		c := candidates[0]
+		return &voiceIntent{
+			TargetDevice: c.device,
+			ThingModel:   c.tm,
+			ActionType:   "property_set",
+			PropertyID:   c.propID,
+			Value:        c.value,
+		}
+	}
+
+	return nil
+}
+
+// getVoiceModule 获取物模型的语音模块配置
+func getVoiceModule(tm *model.ThingModel) *model.ThingModelModule {
+	for i, m := range tm.Modules {
+		if m.ID == "voice" {
+			return &tm.Modules[i]
+		}
+	}
 	return nil
 }
 

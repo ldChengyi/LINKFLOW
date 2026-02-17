@@ -205,4 +205,90 @@ export const moduleApi = {
   get: (id: string) => api.get<Module>(`/modules/${id}`),
 };
 
+// 审计日志相关类型
+export interface AuditLog {
+  id: number;
+  user_id?: string;
+  category: string;
+  action: string;
+  resource: string;
+  detail?: Record<string, unknown>;
+  ip: string;
+  status_code: number;
+  latency_ms: number;
+  user_agent?: string;
+  created_at: string;
+}
+
+export interface AuditLogQuery {
+  category?: string;
+  action?: string;
+  start_time?: string;
+  end_time?: string;
+  page?: number;
+  page_size?: number;
+}
+
+export const auditLogApi = {
+  list: (params: AuditLogQuery) =>
+    api.get<ListResponse<AuditLog>>('/audit-logs', { params }),
+};
+
+// 告警规则相关类型
+export interface AlertRule {
+  id: string;
+  user_id: string;
+  name: string;
+  device_id: string;
+  device_name: string;
+  model_id: string;
+  property_id: string;
+  operator: '>' | '>=' | '<' | '<=' | '==' | '!=';
+  threshold: number;
+  severity: 'info' | 'warning' | 'critical';
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AlertRuleRequest {
+  name: string;
+  device_id: string;
+  property_id: string;
+  operator: string;
+  threshold: number;
+  severity: string;
+  enabled: boolean;
+}
+
+export interface AlertLog {
+  id: number;
+  rule_id: string;
+  user_id: string;
+  device_id: string;
+  device_name: string;
+  property_id: string;
+  property_name: string;
+  operator: string;
+  threshold: number;
+  actual_value: number;
+  severity: string;
+  rule_name: string;
+  created_at: string;
+}
+
+export const alertRuleApi = {
+  list: (page = 1, pageSize = 10, deviceId?: string) =>
+    api.get<ListResponse<AlertRule>>('/alert-rules', { params: { page, page_size: pageSize, ...(deviceId ? { device_id: deviceId } : {}) } }),
+  get: (id: string) => api.get<AlertRule>(`/alert-rules/${id}`),
+  create: (data: AlertRuleRequest) => api.post<AlertRule>('/alert-rules', data),
+  update: (id: string, data: AlertRuleRequest) => api.put<AlertRule>(`/alert-rules/${id}`, data),
+  delete: (id: string) => api.delete(`/alert-rules/${id}`),
+};
+
+export const alertLogApi = {
+  list: (page = 1, pageSize = 20, deviceId?: string) =>
+    api.get<ListResponse<AlertLog>>('/alert-logs', { params: { page, page_size: pageSize, ...(deviceId ? { device_id: deviceId } : {}) } }),
+};
+
 export default api;

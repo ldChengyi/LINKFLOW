@@ -1,11 +1,15 @@
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
-import { Blocks, Mic } from 'lucide-react';
+import { Blocks, Mic, Eye } from 'lucide-react';
 import { moduleApi } from '../api';
 import type { Module } from '../api';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogClose,
+} from '@/components/ui/dialog';
 
 const moduleIcons: Record<string, typeof Mic> = {
   voice: Mic,
@@ -14,6 +18,7 @@ const moduleIcons: Record<string, typeof Mic> = {
 export default function ModuleList() {
   const [modules, setModules] = useState<Module[]>([]);
   const [loading, setLoading] = useState(true);
+  const [selected, setSelected] = useState<Module | null>(null);
 
   useEffect(() => {
     fetchModules();
@@ -39,6 +44,7 @@ export default function ModuleList() {
   }
 
   return (
+    <>
     <div className="space-y-6">
       <div className="flex items-center gap-3">
         <Blocks className="h-5 w-5 text-primary" />
@@ -53,98 +59,30 @@ export default function ModuleList() {
           </CardContent>
         </Card>
       ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {modules.map((mod) => {
             const Icon = moduleIcons[mod.id] || Blocks;
-            const schema = mod.config_schema || {};
-            const configKeys = Object.keys(schema);
-
             return (
-              <Card key={mod.id}>
-                <CardHeader className="pb-3">
-                  <div className="flex items-center gap-3">
-                    <div className="p-2.5 rounded-lg bg-primary/10">
+              <Card key={mod.id} className="flex flex-col">
+                <CardContent className="flex flex-col flex-1 pt-6">
+                  <div className="flex items-start gap-3 mb-3">
+                    <div className="p-2.5 rounded-lg bg-primary/10 shrink-0">
                       <Icon className="h-5 w-5 text-primary" />
                     </div>
-                    <div className="flex-1">
+                    <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
-                        <CardTitle className="text-base">{mod.name}</CardTitle>
+                        <span className="font-semibold text-sm">{mod.name}</span>
                         <Badge variant="outline" className="font-mono text-xs">{mod.id}</Badge>
                       </div>
-                      <p className="text-sm text-muted-foreground mt-0.5">{mod.description}</p>
+                      <p className="text-sm text-muted-foreground mt-1 line-clamp-2">{mod.description}</p>
                     </div>
                   </div>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  {/* 使用方式 */}
-                  <div className="space-y-2">
-                    <p className="text-sm font-medium">使用方式</p>
-                    <div className="text-sm text-muted-foreground space-y-1 bg-muted/50 rounded-lg p-3">
-                      <p>1. 在物模型编辑页的「模块」标签页中启用此模块</p>
-                      <p>2. 选择需要暴露给模块的属性和服务</p>
-                      <p>3. 绑定该物模型的设备将自动获得模块能力</p>
-                    </div>
-                  </div>
-
-                  {/* 配置项说明 */}
-                  {configKeys.length > 0 && (
-                    <div className="space-y-2">
-                      <p className="text-sm font-medium">配置项</p>
-                      <div className="rounded-lg border overflow-hidden">
-                        <table className="w-full text-sm">
-                          <thead>
-                            <tr className="bg-muted/50 text-muted-foreground">
-                              <th className="text-left px-3 py-2 font-medium">字段</th>
-                              <th className="text-left px-3 py-2 font-medium">类型</th>
-                              <th className="text-left px-3 py-2 font-medium">说明</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {configKeys.map((key) => {
-                              const field = schema[key] as Record<string, unknown>;
-                              return (
-                                <tr key={key} className="border-t">
-                                  <td className="px-3 py-2 font-mono text-xs">{key}</td>
-                                  <td className="px-3 py-2">
-                                    <Badge variant="secondary" className="text-xs">
-                                      {String(field.type || 'any')}
-                                    </Badge>
-                                  </td>
-                                  <td className="px-3 py-2 text-muted-foreground text-xs">
-                                    {String(field.description || '-')}
-                                  </td>
-                                </tr>
-                              );
-                            })}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* 语音模块专属：MQTT Topic 说明 */}
-                  {mod.id === 'voice' && (
-                    <div className="space-y-2">
-                      <p className="text-sm font-medium">MQTT Topic</p>
-                      <div className="space-y-1.5">
-                        <TopicRow direction="up" topic="devices/{device_id}/voice/up" desc="设备上报语音文本" />
-                        <TopicRow direction="down" topic="devices/{device_id}/voice/down" desc="平台返回执行结果" />
-                      </div>
-                      <div className="space-y-1.5 mt-3">
-                        <p className="text-xs text-muted-foreground">上报 Payload</p>
-                        <pre className="bg-muted rounded-lg p-3 text-xs font-mono overflow-x-auto">
-{JSON.stringify({ text: "打开灯" }, null, 2)}
-                        </pre>
-                        <p className="text-xs text-muted-foreground mt-2">返回 Payload</p>
-                        <pre className="bg-muted rounded-lg p-3 text-xs font-mono overflow-x-auto">
-{JSON.stringify({ success: true, message: "已执行", action: "set_property" }, null, 2)}
-                        </pre>
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="flex items-center gap-2 pt-2 border-t text-xs text-muted-foreground">
-                    <span>创建于 {new Date(mod.created_at).toLocaleDateString()}</span>
+                  <div className="flex items-center justify-between mt-auto pt-3 border-t">
+                    <span className="text-xs text-muted-foreground">创建于 {new Date(mod.created_at).toLocaleDateString()}</span>
+                    <Button variant="outline" size="sm" onClick={() => setSelected(mod)}>
+                      <Eye className="h-4 w-4 mr-1" />
+                      查看详情
+                    </Button>
                   </div>
                 </CardContent>
               </Card>
@@ -153,6 +91,110 @@ export default function ModuleList() {
         </div>
       )}
     </div>
+
+    <Dialog open={!!selected} onOpenChange={(open) => !open && setSelected(null)}>
+      <DialogContent className="sm:max-w-2xl max-h-[85vh] overflow-y-auto">
+        {selected && <ModuleDetail mod={selected} />}
+        <DialogClose asChild>
+          <Button variant="outline" className="w-full">关闭</Button>
+        </DialogClose>
+      </DialogContent>
+    </Dialog>
+    </>
+  );
+}
+
+function ModuleDetail({ mod }: { mod: Module }) {
+  const Icon = moduleIcons[mod.id] || Blocks;
+  const schema = mod.config_schema || {};
+  const configKeys = Object.keys(schema);
+
+  return (
+    <>
+      <DialogHeader>
+        <div className="flex items-center gap-3">
+          <div className="p-2.5 rounded-lg bg-primary/10">
+            <Icon className="h-5 w-5 text-primary" />
+          </div>
+          <div>
+            <DialogTitle className="flex items-center gap-2">
+              {mod.name}
+              <Badge variant="outline" className="font-mono text-xs">{mod.id}</Badge>
+            </DialogTitle>
+            <p className="text-sm text-muted-foreground mt-0.5">{mod.description}</p>
+          </div>
+        </div>
+      </DialogHeader>
+
+      <div className="space-y-5 mt-2">
+        {/* 使用方式 */}
+        <div className="space-y-2">
+          <p className="text-sm font-medium">使用方式</p>
+          <div className="text-sm text-muted-foreground space-y-1 bg-muted/50 rounded-lg p-3">
+            <p>1. 在物模型编辑页的「模块」标签页中启用此模块</p>
+            <p>2. 选择需要暴露给模块的属性和服务</p>
+            <p>3. 绑定该物模型的设备将自动获得模块能力</p>
+          </div>
+        </div>
+
+        {/* 配置项 */}
+        {configKeys.length > 0 && (
+          <div className="space-y-2">
+            <p className="text-sm font-medium">配置项</p>
+            <div className="rounded-lg border overflow-hidden">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-muted/50 text-muted-foreground">
+                    <th className="text-left px-3 py-2 font-medium">字段</th>
+                    <th className="text-left px-3 py-2 font-medium">类型</th>
+                    <th className="text-left px-3 py-2 font-medium">说明</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {configKeys.map((key) => {
+                    const field = schema[key] as Record<string, unknown>;
+                    return (
+                      <tr key={key} className="border-t">
+                        <td className="px-3 py-2 font-mono text-xs">{key}</td>
+                        <td className="px-3 py-2">
+                          <Badge variant="secondary" className="text-xs">
+                            {String(field.type || 'any')}
+                          </Badge>
+                        </td>
+                        <td className="px-3 py-2 text-muted-foreground text-xs">
+                          {String(field.description || '-')}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* 语音模块 MQTT Topic */}
+        {mod.id === 'voice' && (
+          <div className="space-y-2">
+            <p className="text-sm font-medium">MQTT Topic</p>
+            <div className="space-y-1.5">
+              <TopicRow direction="up" topic="devices/{device_id}/voice/up" desc="设备上报语音文本" />
+              <TopicRow direction="down" topic="devices/{device_id}/voice/down" desc="平台返回执行结果" />
+            </div>
+            <div className="space-y-1.5 mt-3">
+              <p className="text-xs text-muted-foreground">上报 Payload</p>
+              <pre className="bg-muted rounded-lg p-3 text-xs font-mono overflow-x-auto">
+{JSON.stringify({ text: "打开灯" }, null, 2)}
+              </pre>
+              <p className="text-xs text-muted-foreground mt-2">返回 Payload</p>
+              <pre className="bg-muted rounded-lg p-3 text-xs font-mono overflow-x-auto">
+{JSON.stringify({ success: true, message: "已执行", action: "set_property" }, null, 2)}
+              </pre>
+            </div>
+          </div>
+        )}
+      </div>
+    </>
   );
 }
 

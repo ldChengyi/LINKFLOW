@@ -18,6 +18,7 @@ import (
 	mqttbroker "github.com/ldchengyi/linkflow/internal/mqtt"
 	"github.com/ldchengyi/linkflow/internal/repository"
 	"github.com/ldchengyi/linkflow/internal/service"
+	"github.com/ldchengyi/linkflow/internal/ws"
 )
 
 func main() {
@@ -57,6 +58,11 @@ func main() {
 	defer rdb.Close()
 	logger.Log.Info("Redis connected")
 
+	// 初始化 WebSocket Hub
+	hub := ws.NewHub()
+	go hub.Run()
+	logger.Log.Info("WebSocket hub started")
+
 	// 初始化服务
 	userRepo := repository.NewUserRepository(db.App())
 	thingModelRepo := repository.NewThingModelRepository(db.App())
@@ -66,14 +72,19 @@ func main() {
 	deviceRepo := repository.NewDeviceRepository(db.App())
 	deviceDataRepoApp := repository.NewDeviceDataRepository(db.App())
 	moduleRepo := repository.NewModuleRepository(db.App())
+	auditLogRepo := repository.NewAuditLogRepository(db.Admin())
+	alertRuleRepoApp := repository.NewAlertRuleRepository(db.App())
+	alertLogRepoApp := repository.NewAlertLogRepository(db.App())
 
 	// MQTT 专用 Repository（使用 Admin pool 绕过 RLS）
 	mqttDeviceRepo := repository.NewDeviceRepository(db.Admin())
 	mqttThingModelRepo := repository.NewThingModelRepository(db.Admin())
 	deviceDataRepo := repository.NewDeviceDataRepository(db.Admin())
+	mqttAlertRuleRepo := repository.NewAlertRuleRepository(db.Admin())
+	mqttAlertLogRepo := repository.NewAlertLogRepository(db.Admin())
 
 	// 初始化 MQTT Broker
-	broker := mqttbroker.NewBroker(cfg.MQTT, mqttDeviceRepo, mqttThingModelRepo, deviceDataRepo, rdb)
+	broker := mqttbroker.NewBroker(cfg.MQTT, mqttDeviceRepo, mqttThingModelRepo, deviceDataRepo, auditLogRepo, mqttAlertRuleRepo, mqttAlertLogRepo, rdb, hub)
 	if err := broker.Start(); err != nil {
 		logger.Log.Fatalf("Failed to start MQTT broker: %v", err)
 	}
@@ -85,6 +96,10 @@ func main() {
 	deviceHandler := handler.NewDeviceHandler(deviceRepo, deviceDataRepoApp, db.App(), rdb)
 	statsHandler := handler.NewStatsHandler(deviceRepo, thingModelRepo, db.App(), rdb)
 	moduleHandler := handler.NewModuleHandler(moduleRepo)
+	auditLogHandler := handler.NewAuditLogHandler(auditLogRepo)
+	wsHandler := handler.NewWSHandler(hub, jwtService)
+	alertRuleHandler := handler.NewAlertRuleHandler(alertRuleRepoApp, db.App(), broker)
+	alertLogHandler := handler.NewAlertLogHandler(alertLogRepoApp, db.App())
 
 	// 设置路由
 	router := gin.Default()
@@ -96,6 +111,7 @@ func main() {
 
 	// API 路由
 	api := router.Group("/api")
+	api.Use(middleware.AuditLog(auditLogRepo))
 	{
 		// 公开路由
 		auth := api.Group("/auth")
@@ -103,6 +119,9 @@ func main() {
 			auth.POST("/register", authHandler.Register)
 			auth.POST("/login", authHandler.Login)
 		}
+
+		// WebSocket（token 通过 query param 认证，不走 Auth 中间件）
+		api.GET("/ws", wsHandler.Connect)
 
 		// 需要认证的路由
 		protected := api.Group("")
@@ -146,6 +165,22 @@ func main() {
 				modules.GET("", moduleHandler.List)
 				modules.GET("/:id", moduleHandler.Get)
 			}
+
+			// 告警规则路由
+			alertRules := protected.Group("/alert-rules")
+			{
+				alertRules.POST("", alertRuleHandler.Create)
+				alertRules.GET("", alertRuleHandler.List)
+				alertRules.GET("/:id", alertRuleHandler.Get)
+				alertRules.PUT("/:id", alertRuleHandler.Update)
+				alertRules.DELETE("/:id", alertRuleHandler.Delete)
+			}
+
+			// 告警日志路由
+			protected.GET("/alert-logs", alertLogHandler.List)
+
+			// 审计日志路由（admin 查所有，普通用户查自己的）
+			protected.GET("/audit-logs", auditLogHandler.List)
 		}
 	}
 

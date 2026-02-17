@@ -11,6 +11,7 @@ import (
 
 	"github.com/ldchengyi/linkflow/internal/logger"
 	"github.com/ldchengyi/linkflow/internal/model"
+	"github.com/ldchengyi/linkflow/internal/ws"
 )
 
 // EventHook 连接管理 + 消息处理
@@ -40,10 +41,12 @@ func (h *EventHook) OnDisconnect(cl *mochi.Client, err error, expire bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// 先取 userID，再清缓存
-	var userID string
+	// 先取设备信息，再清缓存
+	var userID, deviceName string
 	if infoVal, ok := h.broker.devices.Load(deviceID); ok {
-		userID = infoVal.(DeviceInfo).UserID
+		info := infoVal.(DeviceInfo)
+		userID = info.UserID
+		deviceName = info.DeviceName
 	}
 
 	// Redis: 标记离线
@@ -60,6 +63,31 @@ func (h *EventHook) OnDisconnect(cl *mochi.Client, err error, expire bool) {
 
 	// 清除设备缓存
 	h.broker.devices.Delete(deviceID)
+
+	// WebSocket 推送设备离线 + 统计更新
+	if h.broker.hub != nil && userID != "" {
+		h.broker.hub.SendToUser(userID, &ws.Message{
+			Type: "device_status",
+			Data: map[string]interface{}{"device_id": deviceID, "device_name": deviceName, "status": "offline"},
+		})
+		go h.broker.pushStats(userID)
+	}
+
+	// 异步写入设备离线审计日志
+	if userID != "" {
+		go func(devID, uID, dName string) {
+			aCtx, aCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer aCancel()
+			h.broker.auditLogRepo.Create(aCtx, &model.AuditLog{
+				UserID:    &uID,
+				Category:  model.AuditCategoryDevice,
+				Action:    "DEVICE_OFFLINE",
+				Resource:  devID,
+				Detail:    map[string]any{"device_name": dName},
+				CreatedAt: time.Now(),
+			})
+		}(deviceID, userID, deviceName)
+	}
 
 	logger.Log.Infof("Device offline: device_id=%s", deviceID)
 }
@@ -115,6 +143,26 @@ func (h *EventHook) OnPublished(cl *mochi.Client, pk packets.Packet) {
 	}
 
 	h.store(deviceID, info.UserID, topic, payload, pk.FixedHeader.Qos, valid, errors)
+
+	// WebSocket 推送遥测数据
+	if h.broker.hub != nil {
+		h.broker.hub.SendToUser(info.UserID, &ws.Message{
+			Type: "telemetry",
+			Data: map[string]interface{}{
+				"device_id":   deviceID,
+				"device_name": info.DeviceName,
+				"payload":     payload,
+				"valid":       valid,
+				"errors":      errors,
+				"time":        time.Now(),
+			},
+		})
+	}
+
+	// 告警规则评估
+	if valid && info.ModelID != "" {
+		go h.checkAlertRules(deviceID, info.UserID, info.DeviceName, info.ModelID, payload)
+	}
 }
 
 // getModelProperties 获取物模型属性（带缓存）
@@ -146,6 +194,113 @@ func (h *EventHook) store(deviceID, userID, topic string, payload map[string]int
 
 	if err := h.broker.deviceDataRepo.InsertTelemetry(ctx, deviceID, userID, topic, payload, qos, valid, errors); err != nil {
 		logger.Log.Errorf("Failed to store telemetry: device_id=%s, err=%v", deviceID, err)
+	}
+}
+
+// checkAlertRules 评估告警规则
+func (h *EventHook) checkAlertRules(deviceID, userID, deviceName, modelID string, payload map[string]interface{}) {
+	// 从缓存获取规则，未命中则查数据库
+	var rules []*model.AlertRule
+	if cached, ok := h.broker.alertRules.Load(deviceID); ok {
+		rules = cached.([]*model.AlertRule)
+	} else {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		var err error
+		rules, err = h.broker.alertRuleRepo.ListEnabledByDeviceID(ctx, deviceID)
+		if err != nil {
+			logger.Log.Errorf("checkAlertRules: load rules failed: device_id=%s, err=%v", deviceID, err)
+			return
+		}
+		h.broker.alertRules.Store(deviceID, rules)
+	}
+
+	if len(rules) == 0 {
+		return
+	}
+
+	// 获取物模型属性名映射
+	properties := h.getModelProperties(modelID)
+	propNameMap := make(map[string]string)
+	for _, p := range properties {
+		propNameMap[p.ID] = p.Name
+	}
+
+	for _, rule := range rules {
+		val, ok := payload[rule.PropertyID]
+		if !ok {
+			continue
+		}
+
+		var numVal float64
+		switch v := val.(type) {
+		case float64:
+			numVal = v
+		case json.Number:
+			numVal, _ = v.Float64()
+		case bool:
+			if v {
+				numVal = 1
+			}
+		default:
+			continue
+		}
+
+		triggered := false
+		switch rule.Operator {
+		case ">":
+			triggered = numVal > rule.Threshold
+		case ">=":
+			triggered = numVal >= rule.Threshold
+		case "<":
+			triggered = numVal < rule.Threshold
+		case "<=":
+			triggered = numVal <= rule.Threshold
+		case "==":
+			triggered = numVal == rule.Threshold
+		case "!=":
+			triggered = numVal != rule.Threshold
+		}
+
+		if !triggered {
+			continue
+		}
+
+		propName := propNameMap[rule.PropertyID]
+		if propName == "" {
+			propName = rule.PropertyID
+		}
+
+		alertLog := &model.AlertLog{
+			RuleID:       rule.ID,
+			UserID:       userID,
+			DeviceID:     deviceID,
+			DeviceName:   deviceName,
+			PropertyID:   rule.PropertyID,
+			PropertyName: propName,
+			Operator:     rule.Operator,
+			Threshold:    rule.Threshold,
+			ActualValue:  numVal,
+			Severity:     rule.Severity,
+			RuleName:     rule.Name,
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := h.broker.alertLogRepo.Create(ctx, alertLog); err != nil {
+			logger.Log.Errorf("checkAlertRules: write alert log failed: %v", err)
+		}
+		cancel()
+
+		// WebSocket 推送告警
+		if h.broker.hub != nil {
+			h.broker.hub.SendToUser(userID, &ws.Message{
+				Type: "alert",
+				Data: alertLog,
+			})
+		}
+
+		logger.Log.Warnf("Alert triggered: rule=%s, device=%s, property=%s, value=%.2f %s %.2f",
+			rule.Name, deviceName, rule.PropertyID, numVal, rule.Operator, rule.Threshold)
 	}
 }
 

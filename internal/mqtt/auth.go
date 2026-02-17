@@ -9,6 +9,8 @@ import (
 	"github.com/mochi-mqtt/server/v2/packets"
 
 	"github.com/ldchengyi/linkflow/internal/logger"
+	"github.com/ldchengyi/linkflow/internal/model"
+	"github.com/ldchengyi/linkflow/internal/ws"
 )
 
 // AuthHook 设备认证 + ACL 控制
@@ -50,8 +52,9 @@ func (h *AuthHook) OnConnectAuthenticate(cl *mochi.Client, pk packets.Packet) bo
 		modelID = *device.ModelID
 	}
 	h.broker.devices.Store(deviceID, DeviceInfo{
-		UserID:  device.UserID,
-		ModelID: modelID,
+		UserID:     device.UserID,
+		ModelID:    modelID,
+		DeviceName: device.Name,
 	})
 
 	// 认证成功后立即标记设备在线（OnConnect 可能先于此执行，所以在这里处理）
@@ -63,6 +66,30 @@ func (h *AuthHook) OnConnectAuthenticate(cl *mochi.Client, pk packets.Packet) bo
 	}
 
 	logger.Log.Infof("MQTT auth success & online: device_id=%s, user_id=%s", deviceID, device.UserID)
+
+	// WebSocket 推送设备上线 + 统计更新
+	if h.broker.hub != nil {
+		h.broker.hub.SendToUser(device.UserID, &ws.Message{
+			Type: "device_status",
+			Data: map[string]interface{}{"device_id": deviceID, "device_name": device.Name, "status": "online"},
+		})
+		go h.broker.pushStats(device.UserID)
+	}
+
+	// 异步写入设备上线审计日志
+	go func(devID, userID, devName string) {
+		aCtx, aCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer aCancel()
+		h.broker.auditLogRepo.Create(aCtx, &model.AuditLog{
+			UserID:   &userID,
+			Category: model.AuditCategoryDevice,
+			Action:   "DEVICE_ONLINE",
+			Resource: devID,
+			Detail:   map[string]any{"device_name": devName},
+			CreatedAt: time.Now(),
+		})
+	}(deviceID, device.UserID, device.Name)
+
 	return true
 }
 

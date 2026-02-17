@@ -294,5 +294,28 @@ INSERT INTO modules (id, name, description, config_schema) VALUES (
 GRANT SELECT ON modules TO linkflow_app;
 GRANT SELECT ON modules TO linkflow_read;
 
+-- ============ Audit Logs Table (审计日志) ============
+CREATE TABLE IF NOT EXISTS audit_logs (
+    id         BIGSERIAL PRIMARY KEY,
+    user_id    UUID,
+    category   VARCHAR(20) NOT NULL DEFAULT 'api',
+    action     VARCHAR(100) NOT NULL,
+    resource   VARCHAR(255) NOT NULL,
+    detail     JSONB,
+    ip         VARCHAR(45) NOT NULL DEFAULT '',
+    status_code SMALLINT NOT NULL DEFAULT 0,
+    latency_ms INTEGER NOT NULL DEFAULT 0,
+    user_agent VARCHAR(500),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_logs_user_id ON audit_logs (user_id);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs (action);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_category ON audit_logs (category);
+
+GRANT SELECT, INSERT ON audit_logs TO linkflow_admin;
+GRANT USAGE, SELECT ON SEQUENCE audit_logs_id_seq TO linkflow_admin;
+
 -- Done
 SELECT 'LinkFlow database initialized successfully!' AS status;

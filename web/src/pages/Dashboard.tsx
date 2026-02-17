@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
-  LayoutDashboard, Box, Cpu, Activity, Blocks, LogOut, Menu, X, ChevronDown, Leaf, User,
+  LayoutDashboard, Box, Cpu, Activity, Blocks, ScrollText, LogOut, Menu, X, ChevronDown, Leaf, User, Bell, AlertTriangle,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { authApi, statsApi } from '../api';
@@ -11,12 +11,18 @@ import { Button } from '@/components/ui/button';
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { useWebSocket } from '../hooks/useWebSocket';
+import type { WSMessage } from '../hooks/useWebSocket';
 import ThingModelList from './ThingModelList';
 import ThingModelForm from './ThingModelForm';
 import DeviceList from './DeviceList';
 import DeviceForm from './DeviceForm';
 import DeviceData from './DeviceData';
 import ModuleList from './ModuleList';
+import AuditLogList from './AuditLogList';
+import AlertRuleList from './AlertRuleList';
+import AlertRuleForm from './AlertRuleForm';
+import AlertLogList from './AlertLogList';
 
 interface UserInfo {
   user_id: string;
@@ -28,16 +34,21 @@ const navItems = [
   { key: 'thing-models', label: '物模型', icon: Box, path: '/thing-models' },
   { key: 'devices', label: '设备管理', icon: Cpu, path: '/devices' },
   { key: 'device-data', label: '设备数据', icon: Activity, path: '/device-data' },
+  { key: 'alert-rules', label: '告警规则', icon: Bell, path: '/alert-rules' },
+  { key: 'alert-logs', label: '告警历史', icon: AlertTriangle, path: '/alert-logs' },
   { key: 'modules', label: '功能模块', icon: Blocks, path: '/modules' },
+  { key: 'audit-logs', label: '审计日志', icon: ScrollText, path: '/audit-logs' },
 ];
 
-function WelcomePage({ user }: { user: UserInfo | null }) {
-  const [stats, setStats] = useState<StatsOverview | null>(null);
+// 全局 WS 事件总线，子页面可以订阅
+type WSListener = (msg: WSMessage) => void;
+const wsListeners = new Set<WSListener>();
+export function onWSMessage(listener: WSListener) {
+  wsListeners.add(listener);
+  return () => { wsListeners.delete(listener); };
+}
 
-  useEffect(() => {
-    statsApi.overview().then(({ data }) => setStats(data)).catch(() => {});
-  }, []);
-
+function WelcomePage({ user, stats }: { user: UserInfo | null; stats: StatsOverview | null }) {
   const statItems = [
     { label: '设备总数', value: stats?.total_devices ?? '--', color: 'text-primary' },
     { label: '在线设备', value: stats?.online_devices ?? '--', color: 'text-emerald-400' },
@@ -74,9 +85,11 @@ export default function Dashboard() {
   const location = useLocation();
   const [user, setUser] = useState<UserInfo | null>(null);
   const [collapsed, setCollapsed] = useState(false);
+  const [stats, setStats] = useState<StatsOverview | null>(null);
 
   useEffect(() => {
     fetchUser();
+    fetchStats();
   }, []);
 
   const fetchUser = async () => {
@@ -87,6 +100,39 @@ export default function Dashboard() {
       // handled by interceptor
     }
   };
+
+  const fetchStats = async () => {
+    try {
+      const { data } = await statsApi.overview();
+      setStats(data);
+    } catch { /* silent */ }
+  };
+
+  // WebSocket 消息处理
+  const handleWSMessage = useCallback((msg: WSMessage) => {
+    // 统计更新
+    if (msg.type === 'stats') {
+      setStats((prev) => prev ? { ...prev, online_devices: msg.data.online_devices } : prev);
+    }
+
+    // 告警 toast
+    if (msg.type === 'alert') {
+      const d = msg.data;
+      const severityMap: Record<string, 'warning' | 'error' | 'info'> = {
+        critical: 'error', warning: 'warning', info: 'info',
+      };
+      const method = severityMap[d.severity] || 'warning';
+      toast[method](`告警: ${d.rule_name}`, {
+        description: `${d.device_name} · ${d.property_name} = ${d.actual_value} ${d.operator} ${d.threshold}`,
+        duration: 8000,
+      });
+    }
+
+    // 广播给子页面
+    wsListeners.forEach((fn) => fn(msg));
+  }, []);
+
+  useWebSocket(handleWSMessage);
 
   const handleLogout = async () => {
     try {
@@ -106,6 +152,9 @@ export default function Dashboard() {
     if (path.startsWith('/device-data')) return 'device-data';
     if (path.startsWith('/devices')) return 'devices';
     if (path.startsWith('/modules')) return 'modules';
+    if (path.startsWith('/audit-logs')) return 'audit-logs';
+    if (path.startsWith('/alert-rules')) return 'alert-rules';
+    if (path.startsWith('/alert-logs')) return 'alert-logs';
     return 'dashboard';
   };
 
@@ -181,7 +230,7 @@ export default function Dashboard() {
 
         <main className="flex-1 overflow-auto p-6">
           <Routes>
-            <Route path="/" element={<WelcomePage user={user} />} />
+            <Route path="/" element={<WelcomePage user={user} stats={stats} />} />
             <Route path="/thing-models" element={<ThingModelList />} />
             <Route path="/thing-models/new" element={<ThingModelForm />} />
             <Route path="/thing-models/:id" element={<ThingModelForm />} />
@@ -192,6 +241,11 @@ export default function Dashboard() {
             <Route path="/devices/:id/edit" element={<DeviceForm />} />
             <Route path="/device-data" element={<DeviceData />} />
             <Route path="/modules" element={<ModuleList />} />
+            <Route path="/audit-logs" element={<AuditLogList />} />
+            <Route path="/alert-rules" element={<AlertRuleList />} />
+            <Route path="/alert-rules/new" element={<AlertRuleForm />} />
+            <Route path="/alert-rules/:id/edit" element={<AlertRuleForm />} />
+            <Route path="/alert-logs" element={<AlertLogList />} />
           </Routes>
         </main>
       </div>

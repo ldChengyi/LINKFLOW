@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	mochi "github.com/mochi-mqtt/server/v2"
 	"github.com/mochi-mqtt/server/v2/listeners"
@@ -12,12 +13,14 @@ import (
 	"github.com/ldchengyi/linkflow/internal/config"
 	"github.com/ldchengyi/linkflow/internal/logger"
 	"github.com/ldchengyi/linkflow/internal/repository"
+	"github.com/ldchengyi/linkflow/internal/ws"
 )
 
 // DeviceInfo 缓存已连接设备的信息
 type DeviceInfo struct {
-	UserID  string
-	ModelID string // 可能为空（未绑定物模型）
+	UserID     string
+	ModelID    string // 可能为空（未绑定物模型）
+	DeviceName string
 }
 
 // Broker 内嵌 Mochi MQTT 服务器
@@ -27,12 +30,18 @@ type Broker struct {
 	deviceRepo     *repository.DeviceRepository
 	thingModelRepo *repository.ThingModelRepository
 	deviceDataRepo *repository.DeviceDataRepository
+	auditLogRepo   *repository.AuditLogRepository
+	alertRuleRepo  *repository.AlertRuleRepository
+	alertLogRepo   *repository.AlertLogRepository
 	rdb            *cache.Redis
+	hub            *ws.Hub
 
 	// 已连接设备缓存: device_id → DeviceInfo
 	devices sync.Map
 	// 物模型缓存: model_id → []model.Property
 	models sync.Map
+	// 告警规则缓存: device_id → []model.AlertRule
+	alertRules sync.Map
 }
 
 // NewBroker 创建 MQTT Broker
@@ -41,14 +50,22 @@ func NewBroker(
 	deviceRepo *repository.DeviceRepository,
 	thingModelRepo *repository.ThingModelRepository,
 	deviceDataRepo *repository.DeviceDataRepository,
+	auditLogRepo *repository.AuditLogRepository,
+	alertRuleRepo *repository.AlertRuleRepository,
+	alertLogRepo *repository.AlertLogRepository,
 	rdb *cache.Redis,
+	hub *ws.Hub,
 ) *Broker {
 	return &Broker{
 		config:         cfg,
 		deviceRepo:     deviceRepo,
 		thingModelRepo: thingModelRepo,
 		deviceDataRepo: deviceDataRepo,
+		auditLogRepo:   auditLogRepo,
+		alertRuleRepo:  alertRuleRepo,
+		alertLogRepo:   alertLogRepo,
 		rdb:            rdb,
+		hub:            hub,
 	}
 }
 
@@ -95,6 +112,28 @@ func (b *Broker) Stop(_ context.Context) error {
 	}
 	logger.Log.Info("Stopping MQTT broker...")
 	return b.server.Close()
+}
+
+// pushStats 推送统计更新给用户
+func (b *Broker) pushStats(userID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	onlineCount, err := b.rdb.CountUserOnlineDevices(ctx, userID)
+	if err != nil {
+		logger.Log.Errorf("pushStats: count online devices failed: %v", err)
+		return
+	}
+
+	b.hub.SendToUser(userID, &ws.Message{
+		Type: "stats",
+		Data: map[string]interface{}{"online_devices": onlineCount},
+	})
+}
+
+// InvalidateAlertRulesCache 清除指定设备的告警规则缓存
+func (b *Broker) InvalidateAlertRulesCache(deviceID string) {
+	b.alertRules.Delete(deviceID)
 }
 
 // Publish 服务端下发消息
