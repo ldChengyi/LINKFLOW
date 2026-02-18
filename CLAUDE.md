@@ -82,7 +82,8 @@ linkflow/
 │   │   ├── ws.go                   # WebSocket 升级处理器
 │   │   ├── alert_rule.go           # 告警规则 CRUD 处理器
 │   │   ├── alert_log.go            # 告警日志查询处理器
-│   │   └── scheduled_task.go       # 定时任务 CRUD 处理器
+│   │   ├── scheduled_task.go       # 定时任务 CRUD 处理器
+│   │   └── debug.go                # 设备在线调试处理器（模拟上下线 + 指令下发）
 │   ├── logger/logger.go            # zap 日志封装
 │   ├── middleware/auth.go          # JWT 认证中间件
 │   ├── mqtt/
@@ -146,7 +147,8 @@ linkflow/
 │   │   │   ├── AlertRuleForm.tsx   # 告警规则创建/编辑
 │   │   │   ├── AlertLogList.tsx    # 告警历史（实时新告警推送）
 │   │   │   ├── ScheduledTaskList.tsx # 定时任务列表
-│   │   │   └── ScheduledTaskForm.tsx # 定时任务创建/编辑
+│   │   │   ├── ScheduledTaskForm.tsx # 定时任务创建/编辑
+│   │   │   └── DeviceDebug.tsx      # 设备在线调试（模拟上下线 + 属性下发 + 服务调用）
 │   │   ├── App.tsx                 # 路由配置
 │   │   └── main.tsx                # 入口文件
 │   ├── Dockerfile                   # 前端镜像（Nginx）
@@ -198,7 +200,7 @@ linkflow/
    - 登录/注册页面（内联表单验证 + 错误/成功反馈）
    - 多主题支持（翠绿深色 / 天蓝浅色），CSS 变量 + `data-theme` 切换
    - 仪表盘（可折叠侧边栏 + 顶部用户菜单 + 主题切换）
-   - 导航：仪表盘 / 物模型 / 设备管理 / 设备数据 / 功能模块 / 告警规则 / 告警历史 / 定时任务
+   - 导航：仪表盘 / 物模型 / 设备管理 / 设备数据 / 功能模块 / 告警规则 / 告警历史 / 定时任务 / 在线调试
    - Nginx 反向代理（80 端口）
    - `/api/*` 请求转发至后端
 
@@ -305,6 +307,16 @@ linkflow/
     - 输入框字段级错误高亮（红色边框 + 图标）
     - 输入时自动清除错误状态，Tab 切换清除所有提示
 
+19. **设备在线调试**
+    - 连接类型识别：区分真实 MQTT 连接（real）和模拟上线（simulated）
+    - 模拟上下线：通过 Redis 短 TTL（5分钟）模拟设备在线，前端心跳续期（每2分钟）
+    - 自动过期：用户离开页面后心跳停止，Redis key 5分钟后自动过期，设备自动下线
+    - 属性下发：通过 MQTT `telemetry/down` 下发属性设置
+    - 服务调用：通过 MQTT `service/invoke` 下发服务调用
+    - 智能回传：模拟设备自动回传 `telemetry/up`（闭合数据链路）；真实设备由硬件自行回传
+    - 真实连接保护：真实 MQTT 连接的设备禁止模拟上下线操作
+    - 前端：连接类型 Badge（MQTT连接/模拟在线/离线）+ 属性/服务控件 + WS实时数据更新
+
 ------
 
 ## API 端点
@@ -343,6 +355,11 @@ linkflow/
 | GET    | /api/scheduled-tasks/:id    | 定时任务详情       | 是   |
 | PUT    | /api/scheduled-tasks/:id    | 更新定时任务       | 是   |
 | DELETE | /api/scheduled-tasks/:id    | 删除定时任务       | 是   |
+| POST   | /api/devices/:id/debug      | 设备调试下发（属性设置/服务调用） | 是   |
+| GET    | /api/devices/:id/connection-type | 查询设备连接类型（real/simulated/offline） | 是   |
+| POST   | /api/devices/:id/simulate/online | 模拟设备上线       | 是   |
+| POST   | /api/devices/:id/simulate/offline | 模拟设备下线      | 是   |
+| POST   | /api/devices/:id/simulate/heartbeat | 模拟上线心跳续期 | 是   |
 
 ------
 
@@ -392,6 +409,7 @@ docker-compose logs -f web
 - [x] 告警系统（阈值规则 + WebSocket 通知 + 告警历史）
 - [x] 数据可视化（历史趋势图表，recharts LineChart）
 - [x] 定时任务系统（Cron 调度 + MQTT 下发 + 前端管理）
+- [x] 设备在线调试（模拟上下线 + 属性下发 + 服务调用 + 智能回传）
 - [ ] 视频接入（RTMP）
 
 ------
@@ -554,6 +572,43 @@ alert_logs (id BIGSERIAL PK, rule_id, user_id, device_id, device_name, property_
 - `internal/handler/alert_log.go` — 日志查询 handler
 - `internal/mqtt/hooks.go` — `checkAlertRules()` 告警评估方法
 - `migrations/007_alert_system.sql` — 表结构 + RLS + 索引
+
+------
+
+## 设备在线调试
+
+### 架构
+- 区分真实 MQTT 连接（real）和模拟上线（simulated）两种在线模式
+- 真实连接：设备通过 MQTT Broker 认证上线，由 `server.Clients.Get()` 判断
+- 模拟上线：通过 Redis 短 TTL（5分钟）标记在线，前端心跳（2分钟）续期
+- 调试下发时，模拟设备自动回传 `telemetry/up`；真实设备由硬件自行回传
+
+### 连接类型判断
+1. `Broker.IsClientConnected(deviceID)` → Mochi `server.Clients.Get()` + `!cl.Closed()` → **real**
+2. Redis `device:online:{device_id}` 存在但无真实连接 → **simulated**
+3. 两者都没有 → **offline**
+
+### 模拟上线自动过期
+- `SetSimulatedOnline()` 写 Redis，TTL = 5 分钟
+- 前端 `setInterval` 每 2 分钟调 `POST /simulate/heartbeat` 续期
+- 用户离开页面 / 切换设备 → interval 清理 → 5 分钟后自动过期下线
+
+### 智能回传
+- 模拟设备：下发 `telemetry/down` 后自动 Publish `telemetry/up`（InlineClient），触发完整数据链路（存储 + WS 推送 + 告警评估）
+- 真实设备：仅下发 `telemetry/down`，等待硬件自行回传
+- `OnPublished` hook 通过 `extractDeviceIDFromTopic()` 从 topic 提取设备 ID（兼容 InlineClient，其 `cl.ID` 为 `"inline"`）
+- `loadDeviceInfo()` 缓存未命中时回查 DB 并缓存（支持模拟设备场景）
+
+### 真实连接保护
+- 真实 MQTT 连接的设备：禁止模拟上线、禁止模拟下线
+- 前端：真实连接时模拟上下线按钮 disabled
+
+### 关键文件
+- `internal/handler/debug.go` — Debug（调试下发）+ SimulateOnline/Offline + SimulateHeartbeat + ConnectionType
+- `internal/mqtt/broker.go` — `IsClientConnected()` 查询真实 MQTT 连接
+- `internal/mqtt/hooks.go` — `extractDeviceIDFromTopic()` + `loadDeviceInfo()` 兼容 InlineClient
+- `internal/cache/redis.go` — `SetSimulatedOnline()` / `RefreshSimulatedOnline()` 短 TTL 管理
+- `web/src/pages/DeviceDebug.tsx` — 连接类型 Badge + 心跳续期 + 属性/服务控件
 
 ------
 

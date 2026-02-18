@@ -92,6 +92,16 @@ func (h *EventHook) OnDisconnect(cl *mochi.Client, err error, expire bool) {
 	logger.Log.Infof("Device offline: device_id=%s", deviceID)
 }
 
+// extractDeviceIDFromTopic 从 topic 中提取设备 ID
+// topic 格式: devices/{device_id}/telemetry/up, devices/{device_id}/event, etc.
+func extractDeviceIDFromTopic(topic string) string {
+	parts := strings.Split(topic, "/")
+	if len(parts) >= 2 && parts[0] == "devices" {
+		return parts[1]
+	}
+	return ""
+}
+
 // OnPublished 处理设备上报的消息
 func (h *EventHook) OnPublished(cl *mochi.Client, pk packets.Packet) {
 	topic := pk.TopicName
@@ -99,7 +109,11 @@ func (h *EventHook) OnPublished(cl *mochi.Client, pk packets.Packet) {
 		return
 	}
 
-	deviceID := cl.ID
+	// 优先从 topic 提取 device ID（兼容 InlineClient 模拟发布）
+	deviceID := extractDeviceIDFromTopic(topic)
+	if deviceID == "" {
+		deviceID = cl.ID
+	}
 
 	// 语音指令走单独的处理链
 	if strings.Contains(topic, "/voice/up") {
@@ -108,13 +122,12 @@ func (h *EventHook) OnPublished(cl *mochi.Client, pk packets.Packet) {
 		return
 	}
 
-	// 从缓存获取设备信息
-	infoVal, ok := h.broker.devices.Load(deviceID)
+	// 从缓存获取设备信息，未命中则查 DB 并缓存
+	info, ok := h.loadDeviceInfo(deviceID)
 	if !ok {
-		logger.Log.Warnf("Device info not found in cache: device_id=%s", deviceID)
+		logger.Log.Warnf("Device info not found: device_id=%s", deviceID)
 		return
 	}
-	info := infoVal.(DeviceInfo)
 
 	// 解析 payload
 	var payload map[string]interface{}
@@ -163,6 +176,32 @@ func (h *EventHook) OnPublished(cl *mochi.Client, pk packets.Packet) {
 	if valid && info.ModelID != "" {
 		go h.checkAlertRules(deviceID, info.UserID, info.DeviceName, info.ModelID, payload)
 	}
+}
+
+// loadDeviceInfo 从缓存获取设备信息，未命中则查 DB 并缓存
+func (h *EventHook) loadDeviceInfo(deviceID string) (DeviceInfo, bool) {
+	if cached, ok := h.broker.devices.Load(deviceID); ok {
+		return cached.(DeviceInfo), true
+	}
+
+	// 缓存未命中（模拟设备场景），查 DB
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	device, err := h.broker.deviceRepo.GetByID(ctx, deviceID)
+	if err != nil {
+		return DeviceInfo{}, false
+	}
+
+	info := DeviceInfo{
+		UserID:     device.UserID,
+		DeviceName: device.Name,
+	}
+	if device.ModelID != nil {
+		info.ModelID = *device.ModelID
+	}
+	h.broker.devices.Store(deviceID, info)
+	return info, true
 }
 
 // getModelProperties 获取物模型属性（带缓存）

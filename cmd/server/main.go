@@ -108,6 +108,7 @@ func main() {
 	alertRuleHandler := handler.NewAlertRuleHandler(alertRuleRepoApp, db.App(), broker)
 	alertLogHandler := handler.NewAlertLogHandler(alertLogRepoApp, db.App())
 	scheduledTaskHandler := handler.NewScheduledTaskHandler(scheduledTaskRepoApp, db.App())
+	debugHandler := handler.NewDebugHandler(deviceRepo, thingModelRepo, db.App(), rdb, broker)
 
 	// 设置路由
 	router := gin.Default()
@@ -163,6 +164,11 @@ func main() {
 				devices.GET("/:id/data/history", deviceHandler.History)
 				devices.PUT("/:id", deviceHandler.Update)
 				devices.DELETE("/:id", deviceHandler.Delete)
+				devices.POST("/:id/debug", debugHandler.Debug)
+				devices.GET("/:id/connection-type", debugHandler.ConnectionType)
+				devices.POST("/:id/simulate/online", debugHandler.SimulateOnline)
+				devices.POST("/:id/simulate/offline", debugHandler.SimulateOffline)
+				devices.POST("/:id/simulate/heartbeat", debugHandler.SimulateHeartbeat)
 			}
 
 			// 统计路由

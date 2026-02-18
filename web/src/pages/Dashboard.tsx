@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
-  LayoutDashboard, Box, Cpu, Activity, Blocks, ScrollText, LogOut, Menu, X, ChevronDown, Leaf, User, Bell, AlertTriangle, Clock, Palette,
+  LayoutDashboard, Box, Cpu, Activity, Blocks, ScrollText, LogOut, Menu, X, ChevronDown, Leaf, User, Bell, AlertTriangle, Clock, Palette, Terminal,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { authApi, statsApi } from '../api';
@@ -26,6 +26,7 @@ import AlertRuleForm from './AlertRuleForm';
 import AlertLogList from './AlertLogList';
 import ScheduledTaskList from './ScheduledTaskList';
 import ScheduledTaskForm from './ScheduledTaskForm';
+import DeviceDebug from './DeviceDebug';
 
 interface UserInfo {
   user_id: string;
@@ -37,6 +38,7 @@ const navItems = [
   { key: 'thing-models', label: '物模型', icon: Box, path: '/thing-models' },
   { key: 'devices', label: '设备管理', icon: Cpu, path: '/devices' },
   { key: 'device-data', label: '设备数据', icon: Activity, path: '/device-data' },
+  { key: 'device-debug', label: '在线调试', icon: Terminal, path: '/device-debug' },
   { key: 'alert-rules', label: '告警规则', icon: Bell, path: '/alert-rules' },
   { key: 'alert-logs', label: '告警历史', icon: AlertTriangle, path: '/alert-logs' },
   { key: 'scheduled-tasks', label: '定时任务', icon: Clock, path: '/scheduled-tasks' },
@@ -154,6 +156,7 @@ export default function Dashboard() {
   const getSelectedKey = () => {
     const path = location.pathname;
     if (path.startsWith('/thing-models')) return 'thing-models';
+    if (path.startsWith('/device-debug')) return 'device-debug';
     if (path.startsWith('/device-data')) return 'device-data';
     if (path.startsWith('/devices')) return 'devices';
     if (path.startsWith('/modules')) return 'modules';
@@ -266,6 +269,7 @@ export default function Dashboard() {
             <Route path="/devices/:id" element={<DeviceForm />} />
             <Route path="/devices/:id/edit" element={<DeviceForm />} />
             <Route path="/device-data" element={<DeviceData />} />
+            <Route path="/device-debug" element={<DeviceDebug />} />
             <Route path="/modules" element={<ModuleList />} />
             <Route path="/audit-logs" element={<AuditLogList />} />
             <Route path="/alert-rules" element={<AlertRuleList />} />

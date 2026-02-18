@@ -11,6 +11,7 @@ const (
 	DeviceOnlineKeyPrefix = "device:online:"
 	UserOnlineSetPrefix   = "user:online_devices:"
 	DeviceOnlineTTL       = 24 * time.Hour
+	SimulatedOnlineTTL    = 5 * time.Minute
 )
 
 type Redis struct {
@@ -70,10 +71,28 @@ func (r *Redis) Exists(ctx context.Context, key string) (bool, error) {
 
 // SetDeviceOnline 标记设备在线（Pipeline: SET key + SADD user set）
 func (r *Redis) SetDeviceOnline(ctx context.Context, deviceID, userID string) error {
+	return r.setDeviceOnlineWithTTL(ctx, deviceID, userID, DeviceOnlineTTL)
+}
+
+// SetSimulatedOnline 模拟上线（短 TTL，需心跳续期）
+func (r *Redis) SetSimulatedOnline(ctx context.Context, deviceID, userID string) error {
+	return r.setDeviceOnlineWithTTL(ctx, deviceID, userID, SimulatedOnlineTTL)
+}
+
+// RefreshSimulatedOnline 续期模拟在线的 TTL
+func (r *Redis) RefreshSimulatedOnline(ctx context.Context, deviceID, userID string) error {
 	pipe := r.client.Pipeline()
-	pipe.Set(ctx, DeviceOnlineKeyPrefix+deviceID, userID, DeviceOnlineTTL)
+	pipe.Expire(ctx, DeviceOnlineKeyPrefix+deviceID, SimulatedOnlineTTL)
+	pipe.Expire(ctx, UserOnlineSetPrefix+userID, SimulatedOnlineTTL)
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
+func (r *Redis) setDeviceOnlineWithTTL(ctx context.Context, deviceID, userID string, ttl time.Duration) error {
+	pipe := r.client.Pipeline()
+	pipe.Set(ctx, DeviceOnlineKeyPrefix+deviceID, userID, ttl)
 	pipe.SAdd(ctx, UserOnlineSetPrefix+userID, deviceID)
-	pipe.Expire(ctx, UserOnlineSetPrefix+userID, DeviceOnlineTTL)
+	pipe.Expire(ctx, UserOnlineSetPrefix+userID, ttl)
 	_, err := pipe.Exec(ctx)
 	return err
 }

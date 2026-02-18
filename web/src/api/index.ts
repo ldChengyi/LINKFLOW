@@ -186,6 +186,12 @@ export const deviceApi = {
   latestData: (id: string) => api.get<DeviceLatestData | null>(`/devices/${id}/data/latest`),
   dataHistory: (id: string, start: string, end: string, limit = 200) =>
     api.get<DeviceHistoryData[]>(`/devices/${id}/data/history`, { params: { start, end, limit } }),
+  debug: (id: string, data: { action_type: string; property_id?: string; service_id?: string; value?: unknown }) =>
+    api.post(`/devices/${id}/debug`, data),
+  connectionType: (id: string) => api.get<{ device_id: string; connection_type: 'real' | 'simulated' | 'offline' }>(`/devices/${id}/connection-type`),
+  simulateOnline: (id: string) => api.post(`/devices/${id}/simulate/online`),
+  simulateOffline: (id: string) => api.post(`/devices/${id}/simulate/offline`),
+  simulateHeartbeat: (id: string) => api.post(`/devices/${id}/simulate/heartbeat`),
 };
 
 // 统计相关类型

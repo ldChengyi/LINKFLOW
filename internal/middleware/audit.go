@@ -34,9 +34,15 @@ var actionMap = map[string]struct {
 	"POST /api/thing-models":     {"创建物模型", "thing_model"},
 	"PUT /api/thing-models/:id":  {"更新物模型", "thing_model"},
 	"DELETE /api/thing-models/:id": {"删除物模型", "thing_model"},
-	"POST /api/devices":          {"创建设备", "device"},
-	"PUT /api/devices/:id":       {"更新设备", "device"},
-	"DELETE /api/devices/:id":    {"删除设备", "device"},
+	"POST /api/devices":               {"创建设备", "device"},
+	"PUT /api/devices/:id":            {"更新设备", "device"},
+	"DELETE /api/devices/:id":         {"删除设备", "device"},
+	"POST /api/scheduled-tasks":       {"创建定时任务", "scheduled_task"},
+	"PUT /api/scheduled-tasks/:id":    {"更新定时任务", "scheduled_task"},
+	"DELETE /api/scheduled-tasks/:id": {"删除定时任务", "scheduled_task"},
+	"POST /api/devices/:id/debug":            {"在线调试", "device"},
+	"POST /api/devices/:id/simulate/online":  {"模拟上线", "device"},
+	"POST /api/devices/:id/simulate/offline": {"模拟下线", "device"},
 }
 
 // AuditLog 操作审计日志中间件
@@ -82,6 +88,17 @@ func AuditLog(repo *repository.AuditLogRepository) gin.HandlerFunc {
 		if mapped, ok := actionMap[routeKey]; ok {
 			action = mapped.Action
 			resourceType = mapped.ResourceType
+		}
+
+		// 定时任务更新时，标注启用/禁用状态
+		if resourceType == "scheduled_task" && method == "PUT" {
+			if enabled, ok := body["enabled"].(bool); ok {
+				if enabled {
+					action = "启用定时任务"
+				} else {
+					action = "禁用定时任务"
+				}
+			}
 		}
 
 		// 提取资源名称
@@ -149,6 +166,8 @@ func extractResourceID(path, resourceType string) string {
 		prefix = "/api/thing-models/"
 	case "device":
 		prefix = "/api/devices/"
+	case "scheduled_task":
+		prefix = "/api/scheduled-tasks/"
 	default:
 		return ""
 	}

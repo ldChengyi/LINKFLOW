@@ -136,6 +136,15 @@ func (b *Broker) InvalidateAlertRulesCache(deviceID string) {
 	b.alertRules.Delete(deviceID)
 }
 
+// IsClientConnected 检查设备是否有真实 MQTT 连接
+func (b *Broker) IsClientConnected(clientID string) bool {
+	if b.server == nil {
+		return false
+	}
+	cl, ok := b.server.Clients.Get(clientID)
+	return ok && !cl.Closed()
+}
+
 // Publish 服务端下发消息
 func (b *Broker) Publish(topic string, payload []byte, retain bool, qos byte) error {
 	if b.server == nil {
