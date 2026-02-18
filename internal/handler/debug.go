@@ -23,20 +23,22 @@ type MQTTPublisher interface {
 type DebugHandler struct {
 	deviceRepo     *repository.DeviceRepository
 	thingModelRepo *repository.ThingModelRepository
+	dataRepo       *repository.DeviceDataRepository
 	pool           *pgxpool.Pool
 	rdb            *cache.Redis
 	publisher      MQTTPublisher
 }
 
-func NewDebugHandler(deviceRepo *repository.DeviceRepository, thingModelRepo *repository.ThingModelRepository, pool *pgxpool.Pool, rdb *cache.Redis, publisher MQTTPublisher) *DebugHandler {
-	return &DebugHandler{deviceRepo: deviceRepo, thingModelRepo: thingModelRepo, pool: pool, rdb: rdb, publisher: publisher}
+func NewDebugHandler(deviceRepo *repository.DeviceRepository, thingModelRepo *repository.ThingModelRepository, dataRepo *repository.DeviceDataRepository, pool *pgxpool.Pool, rdb *cache.Redis, publisher MQTTPublisher) *DebugHandler {
+	return &DebugHandler{deviceRepo: deviceRepo, thingModelRepo: thingModelRepo, dataRepo: dataRepo, pool: pool, rdb: rdb, publisher: publisher}
 }
 
 type DebugRequest struct {
-	ActionType string      `json:"action_type" binding:"required,oneof=property_set service_invoke"`
-	PropertyID string      `json:"property_id"`
-	ServiceID  string      `json:"service_id"`
-	Value      interface{} `json:"value"`
+	ActionType string                 `json:"action_type" binding:"required,oneof=property_set service_invoke"`
+	PropertyID string                 `json:"property_id"`
+	Properties map[string]interface{} `json:"properties"` // 批量属性设置
+	ServiceID  string                 `json:"service_id"`
+	Value      interface{}            `json:"value"`
 }
 
 func (h *DebugHandler) withRLS(c *gin.Context) (context.Context, error) {
@@ -81,7 +83,15 @@ func (h *DebugHandler) Debug(c *gin.Context) {
 		tm, err := h.thingModelRepo.GetByID(ctx, *device.ModelID)
 		if err == nil {
 			if req.ActionType == "property_set" {
-				if !findProperty(tm.Properties, req.PropertyID) {
+				// 批量模式：校验每个 property_id
+				if len(req.Properties) > 0 {
+					for pid := range req.Properties {
+						if !findProperty(tm.Properties, pid) {
+							Fail(c, http.StatusBadRequest, "property not found in thing model: "+pid)
+							return
+						}
+					}
+				} else if !findProperty(tm.Properties, req.PropertyID) {
 					Fail(c, http.StatusBadRequest, "property not found in thing model")
 					return
 				}
@@ -101,7 +111,12 @@ func (h *DebugHandler) Debug(c *gin.Context) {
 	switch req.ActionType {
 	case "property_set":
 		topic = fmt.Sprintf("devices/%s/telemetry/down", deviceID)
-		data := map[string]interface{}{req.PropertyID: req.Value}
+		var data map[string]interface{}
+		if len(req.Properties) > 0 {
+			data = req.Properties
+		} else {
+			data = map[string]interface{}{req.PropertyID: req.Value}
+		}
 		payload, _ = json.Marshal(data)
 	case "service_invoke":
 		topic = fmt.Sprintf("devices/%s/service/invoke", deviceID)
@@ -124,7 +139,26 @@ func (h *DebugHandler) Debug(c *gin.Context) {
 		switch req.ActionType {
 		case "property_set":
 			upTopic := fmt.Sprintf("devices/%s/telemetry/up", deviceID)
-			h.publisher.Publish(upTopic, payload, false, 1)
+			// 合并历史 payload，避免回传数据覆盖掉其他属性
+			echoPayload := payload
+			if latest, err := h.dataRepo.GetLatestData(context.Background(), deviceID); err == nil && latest != nil {
+				merged := make(map[string]interface{}, len(latest.Payload)+len(req.Properties)+1)
+				for k, v := range latest.Payload {
+					merged[k] = v
+				}
+				// 覆盖本次下发的属性
+				if len(req.Properties) > 0 {
+					for k, v := range req.Properties {
+						merged[k] = v
+					}
+				} else {
+					merged[req.PropertyID] = req.Value
+				}
+				if mergedJSON, err := json.Marshal(merged); err == nil {
+					echoPayload = mergedJSON
+				}
+			}
+			h.publisher.Publish(upTopic, echoPayload, false, 1)
 		case "service_invoke":
 			replyTopic := fmt.Sprintf("devices/%s/service/reply", deviceID)
 			reply := map[string]interface{}{

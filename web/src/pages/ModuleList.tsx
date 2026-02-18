@@ -176,21 +176,75 @@ function ModuleDetail({ mod }: { mod: Module }) {
 
         {/* 语音模块 MQTT Topic */}
         {mod.id === 'voice' && (
-          <div className="space-y-2">
-            <p className="text-sm font-medium">MQTT Topic</p>
-            <div className="space-y-1.5">
-              <TopicRow direction="up" topic="devices/{device_id}/voice/up" desc="设备上报语音文本" />
-              <TopicRow direction="down" topic="devices/{device_id}/voice/down" desc="平台返回执行结果" />
-            </div>
-            <div className="space-y-1.5 mt-3">
-              <p className="text-xs text-muted-foreground">上报 Payload</p>
-              <pre className="bg-muted rounded-lg p-3 text-xs font-mono overflow-x-auto">
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <p className="text-sm font-medium">MQTT Topic</p>
+              <div className="space-y-1.5">
+                <TopicRow direction="up" topic="devices/{device_id}/voice/up" desc="设备上报语音文本" />
+                <TopicRow direction="down" topic="devices/{device_id}/voice/down" desc="平台返回执行结果" />
+              </div>
+              <div className="space-y-1.5 mt-3">
+                <p className="text-xs text-muted-foreground">上报 Payload</p>
+                <pre className="bg-muted rounded-lg p-3 text-xs font-mono overflow-x-auto">
 {JSON.stringify({ text: "打开灯" }, null, 2)}
-              </pre>
-              <p className="text-xs text-muted-foreground mt-2">返回 Payload</p>
-              <pre className="bg-muted rounded-lg p-3 text-xs font-mono overflow-x-auto">
-{JSON.stringify({ success: true, message: "已执行", action: "set_property" }, null, 2)}
-              </pre>
+                </pre>
+                <p className="text-xs text-muted-foreground mt-2">返回 Payload（成功）</p>
+                <pre className="bg-muted rounded-lg p-3 text-xs font-mono overflow-x-auto">
+{JSON.stringify({ success: true, message: "指令已执行", action: "设置 台灯.switch = true" }, null, 2)}
+                </pre>
+                <p className="text-xs text-muted-foreground mt-2">返回 Payload（失败）</p>
+                <pre className="bg-muted rounded-lg p-3 text-xs font-mono overflow-x-auto">
+{JSON.stringify({ success: false, message: "未匹配到目标设备" }, null, 2)}
+                </pre>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <p className="text-sm font-medium">支持的指令类型</p>
+              <div className="rounded-lg border overflow-hidden">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="bg-muted/50 text-muted-foreground">
+                      <th className="text-left px-3 py-2 font-medium">意图</th>
+                      <th className="text-left px-3 py-2 font-medium">关键词示例</th>
+                      <th className="text-left px-3 py-2 font-medium">适用类型</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr className="border-t">
+                      <td className="px-3 py-2 font-medium">开关控制</td>
+                      <td className="px-3 py-2 font-mono">打开 / 关闭 / 开启 / 关掉</td>
+                      <td className="px-3 py-2 text-muted-foreground">bool</td>
+                    </tr>
+                    <tr className="border-t">
+                      <td className="px-3 py-2 font-medium">设定值</td>
+                      <td className="px-3 py-2 font-mono">调到X / 设为X / 设置为X</td>
+                      <td className="px-3 py-2 text-muted-foreground">int / float</td>
+                    </tr>
+                    <tr className="border-t">
+                      <td className="px-3 py-2 font-medium">相对调节</td>
+                      <td className="px-3 py-2 font-mono">调高 / 调低 / 增大 / 减小</td>
+                      <td className="px-3 py-2 text-muted-foreground">int / float（按 step）</td>
+                    </tr>
+                    <tr className="border-t">
+                      <td className="px-3 py-2 font-medium">枚举选择</td>
+                      <td className="px-3 py-2 font-mono">说出枚举项的 label</td>
+                      <td className="px-3 py-2 text-muted-foreground">enum</td>
+                    </tr>
+                    <tr className="border-t">
+                      <td className="px-3 py-2 font-medium">服务调用</td>
+                      <td className="px-3 py-2 font-mono">执行 / 重启 / 调用</td>
+                      <td className="px-3 py-2 text-muted-foreground">service</td>
+                    </tr>
+                    <tr className="border-t">
+                      <td className="px-3 py-2 font-medium">状态查询</td>
+                      <td className="px-3 py-2 font-mono">X是多少 / 当前X / 查询X</td>
+                      <td className="px-3 py-2 text-muted-foreground">所有类型（只读）</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <p className="text-xs text-muted-foreground">平台按设备名或属性名在用户所有设备中匹配目标，结果有歧义时不执行。</p>
             </div>
           </div>
         )}

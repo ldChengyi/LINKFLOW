@@ -121,22 +121,27 @@ export default function DeviceDebug() {
   const isOnline = connType !== 'offline';
   const isReal = connType === 'real';
 
-  const handlePropertySet = async (prop: Property) => {
-    const val = propValues[prop.id];
-    if (val === undefined && prop.dataType !== 'bool') {
-      toast.error('请输入值');
-      return;
-    }
-    setSending(prop.id);
+  const handleAllPropertySet = async () => {
+    setSending('__all__');
     try {
-      let sendVal: unknown = val;
-      if (prop.dataType === 'int') sendVal = parseInt(String(val), 10);
-      else if (prop.dataType === 'float') sendVal = parseFloat(String(val));
-      else if (prop.dataType === 'bool') sendVal = val ?? false;
-      else if (prop.dataType === 'enum') sendVal = parseInt(String(val), 10);
-
-      await deviceApi.debug(selectedId, { action_type: 'property_set', property_id: prop.id, value: sendVal });
-      toast.success(`${prop.name} 下发成功`);
+      const properties: Record<string, unknown> = {};
+      for (const prop of rwProps) {
+        const val = propValues[prop.id];
+        if (prop.dataType === 'bool') {
+          properties[prop.id] = val ?? false;
+        } else if (val !== undefined && String(val) !== '') {
+          if (prop.dataType === 'int') properties[prop.id] = parseInt(String(val), 10);
+          else if (prop.dataType === 'float') properties[prop.id] = parseFloat(String(val));
+          else if (prop.dataType === 'enum') properties[prop.id] = parseInt(String(val), 10);
+          else properties[prop.id] = val;
+        }
+      }
+      if (Object.keys(properties).length === 0) {
+        toast.error('请至少设置一个属性值');
+        return;
+      }
+      await deviceApi.debug(selectedId, { action_type: 'property_set', properties });
+      toast.success('属性下发成功');
     } catch (e: unknown) {
       const msg = (e as { response?: { data?: { msg?: string } } })?.response?.data?.msg || '下发失败';
       toast.error(msg);
@@ -313,13 +318,15 @@ export default function DeviceDebug() {
                     </div>
                     <div className="flex items-center gap-3">
                       {renderPropInput(prop)}
-                      <Button size="sm" onClick={() => handlePropertySet(prop)} disabled={sending === prop.id}>
-                        {sending === prop.id ? <Spinner className="h-4 w-4" /> : <Send className="h-4 w-4" />}
-                        <span className="ml-1">下发</span>
-                      </Button>
                     </div>
                   </div>
                 ))}
+                <div className="pt-2 flex justify-end">
+                  <Button onClick={handleAllPropertySet} disabled={sending === '__all__'}>
+                    {sending === '__all__' ? <Spinner className="h-4 w-4 mr-2" /> : <Send className="h-4 w-4 mr-2" />}
+                    下发
+                  </Button>
+                </div>
               </CardContent>
             </Card>
           )}

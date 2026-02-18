@@ -86,9 +86,10 @@ export default function DeviceData() {
     setHistoryLoading(true);
     const end = new Date().toISOString();
     const ms: Record<string, number> = { '1h': 3600000, '6h': 21600000, '24h': 86400000, '7d': 604800000 };
+    const limits: Record<string, number> = { '1h': 200, '6h': 500, '24h': 1000, '7d': 1000 };
     const start = new Date(Date.now() - (ms[range] || 3600000)).toISOString();
     try {
-      const res = await deviceApi.dataHistory(selectedId, start, end);
+      const res = await deviceApi.dataHistory(selectedId, start, end, limits[range] || 200);
       setHistoryData(res.data || []);
     } catch { /* silent */ }
     finally { setHistoryLoading(false); }
@@ -104,11 +105,23 @@ export default function DeviceData() {
   );
 
   const chartData = useMemo(() =>
-    historyData.map(d => ({
-      time: new Date(d.time).toLocaleTimeString(),
-      ...Object.fromEntries(numericProps.map(p => [p.id, d.payload[p.id] ?? null])),
-    })),
-    [historyData, numericProps]
+    historyData.map(d => {
+      const date = new Date(d.time);
+      let timeLabel: string;
+      if (historyRange === '7d') {
+        timeLabel = `${date.getMonth() + 1}/${date.getDate()} ${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
+      } else if (historyRange === '24h') {
+        timeLabel = `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
+      } else {
+        // 1h / 6h: 显示 HH:MM:SS
+        timeLabel = date.toLocaleTimeString();
+      }
+      return {
+        time: timeLabel,
+        ...Object.fromEntries(numericProps.map(p => [p.id, d.payload[p.id] ?? null])),
+      };
+    }),
+    [historyData, numericProps, historyRange]
   );
 
   const COLORS = ['#10b981', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
@@ -543,13 +556,16 @@ export default function DeviceData() {
                           )}
                         </div>
                         {/* 语音上报格式 */}
-                        <div className="space-y-1">
-                          <ApiRow method="PUB" path={`devices/${selectedDevice.id}/voice/up`} desc="语音文本上报" />
-                          <CodeBlock json={{ text: "打开灯" }} />
-                        </div>
-                        <div className="space-y-1">
-                          <ApiRow method="SUB" path={`devices/${selectedDevice.id}/voice/down`} desc="语音执行结果" />
-                          <CodeBlock json={{ success: true, message: "已执行", action: "set_property" }} />
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          <div className="space-y-1">
+                            <ApiRow method="PUB" path={`devices/${selectedDevice.id}/voice/up`} desc="语音文本上报" />
+                            <CodeBlock json={{ text: "打开灯" }} />
+                          </div>
+                          <div className="space-y-1.5">
+                            <ApiRow method="SUB" path={`devices/${selectedDevice.id}/voice/down`} desc="语音执行结果" />
+                            <CodeBlock json={{ success: true, message: "指令已执行", action: `设置 ${selectedDevice.name}.switch = true` }} />
+                            <CodeBlock json={{ success: false, message: "未匹配到目标设备" }} />
+                          </div>
                         </div>
                       </CardContent>
                     </Card>
@@ -626,19 +642,79 @@ export default function DeviceData() {
 
                         {/* 模块专属 MQTT Topic */}
                         {mod.id === 'voice' && (
-                          <div className="space-y-2 pt-2 border-t">
+                          <div className="space-y-3 pt-2 border-t">
                             <p className="text-sm font-medium">MQTT Topic</p>
                             <ApiRow method="PUB" path={`devices/${selectedDevice.id}/voice/up`} desc="语音文本上报" />
                             <ApiRow method="SUB" path={`devices/${selectedDevice.id}/voice/down`} desc="执行结果返回" />
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-2">
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-1">
                               <div>
                                 <p className="text-xs text-muted-foreground mb-1">上报 Payload</p>
                                 <CodeBlock json={{ text: "打开灯" }} />
                               </div>
                               <div>
-                                <p className="text-xs text-muted-foreground mb-1">返回 Payload</p>
-                                <CodeBlock json={{ success: true, message: "已执行", action: "set_property" }} />
+                                <p className="text-xs text-muted-foreground mb-1">返回 Payload（成功）</p>
+                                <CodeBlock json={{ success: true, message: "指令已执行", action: `设置 ${selectedDevice.name}.switch = true` }} />
                               </div>
+                              <div>
+                                <p className="text-xs text-muted-foreground mb-1">返回 Payload（失败）</p>
+                                <CodeBlock json={{ success: false, message: "未匹配到目标设备" }} />
+                              </div>
+                            </div>
+
+                            {/* 支持的指令类型 */}
+                            <div className="space-y-2 pt-1">
+                              <p className="text-sm font-medium">支持的指令类型</p>
+                              <div className="rounded-lg border overflow-hidden">
+                                <table className="w-full text-xs">
+                                  <thead>
+                                    <tr className="bg-muted/50 text-muted-foreground">
+                                      <th className="text-left px-3 py-2 font-medium">意图</th>
+                                      <th className="text-left px-3 py-2 font-medium">关键词示例</th>
+                                      <th className="text-left px-3 py-2 font-medium">适用类型</th>
+                                      <th className="text-left px-3 py-2 font-medium">示例指令</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    <tr className="border-t">
+                                      <td className="px-3 py-2 font-medium">开关控制</td>
+                                      <td className="px-3 py-2 font-mono">打开 / 关闭 / 开启 / 关掉</td>
+                                      <td className="px-3 py-2 text-muted-foreground">bool</td>
+                                      <td className="px-3 py-2 text-muted-foreground">打开{selectedDevice.name}</td>
+                                    </tr>
+                                    <tr className="border-t">
+                                      <td className="px-3 py-2 font-medium">设定值</td>
+                                      <td className="px-3 py-2 font-mono">调到X / 设为X / 设置为X</td>
+                                      <td className="px-3 py-2 text-muted-foreground">int / float</td>
+                                      <td className="px-3 py-2 text-muted-foreground">{selectedDevice.name}亮度调到80</td>
+                                    </tr>
+                                    <tr className="border-t">
+                                      <td className="px-3 py-2 font-medium">相对调节</td>
+                                      <td className="px-3 py-2 font-mono">调高 / 调低 / 增大 / 减小</td>
+                                      <td className="px-3 py-2 text-muted-foreground">int / float（按 step）</td>
+                                      <td className="px-3 py-2 text-muted-foreground">{selectedDevice.name}亮度调高</td>
+                                    </tr>
+                                    <tr className="border-t">
+                                      <td className="px-3 py-2 font-medium">枚举选择</td>
+                                      <td className="px-3 py-2 font-mono">设为X模式</td>
+                                      <td className="px-3 py-2 text-muted-foreground">enum</td>
+                                      <td className="px-3 py-2 text-muted-foreground">设为节能模式</td>
+                                    </tr>
+                                    <tr className="border-t">
+                                      <td className="px-3 py-2 font-medium">服务调用</td>
+                                      <td className="px-3 py-2 font-mono">执行 / 重启 / 调用</td>
+                                      <td className="px-3 py-2 text-muted-foreground">service</td>
+                                      <td className="px-3 py-2 text-muted-foreground">重启{selectedDevice.name}</td>
+                                    </tr>
+                                    <tr className="border-t">
+                                      <td className="px-3 py-2 font-medium">状态查询</td>
+                                      <td className="px-3 py-2 font-mono">X是多少 / 当前X / 查询X</td>
+                                      <td className="px-3 py-2 text-muted-foreground">所有类型</td>
+                                      <td className="px-3 py-2 text-muted-foreground">{selectedDevice.name}温度是多少</td>
+                                    </tr>
+                                  </tbody>
+                                </table>
+                              </div>
+                              <p className="text-xs text-muted-foreground">平台按设备名或属性名在用户所有设备中匹配目标，结果有歧义时不执行。</p>
                             </div>
                           </div>
                         )}
@@ -681,7 +757,7 @@ export default function DeviceData() {
                       <Legend />
                       {numericProps.map((p, i) => (
                         <Line key={p.id} type="monotone" dataKey={p.id} name={`${p.name}${p.unit ? ` (${p.unit})` : ''}`}
-                          stroke={COLORS[i % COLORS.length]} dot={false} strokeWidth={2} />
+                          stroke={COLORS[i % COLORS.length]} dot={false} strokeWidth={2} connectNulls={true} />
                       ))}
                     </LineChart>
                   </ResponsiveContainer>

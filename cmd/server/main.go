@@ -108,7 +108,7 @@ func main() {
 	alertRuleHandler := handler.NewAlertRuleHandler(alertRuleRepoApp, db.App(), broker)
 	alertLogHandler := handler.NewAlertLogHandler(alertLogRepoApp, db.App())
 	scheduledTaskHandler := handler.NewScheduledTaskHandler(scheduledTaskRepoApp, db.App())
-	debugHandler := handler.NewDebugHandler(deviceRepo, thingModelRepo, db.App(), rdb, broker)
+	debugHandler := handler.NewDebugHandler(deviceRepo, thingModelRepo, deviceDataRepo, db.App(), rdb, broker)
 
 	// 设置路由
 	router := gin.Default()
