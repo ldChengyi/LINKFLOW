@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -34,6 +35,8 @@ func setupRouter() {
 	alertRuleRepo := repository.NewAlertRuleRepository(testPool)
 	alertLogRepo := repository.NewAlertLogRepository(testPool)
 	scheduledTaskRepo := repository.NewScheduledTaskRepository(testPool)
+	firmwareRepo := repository.NewFirmwareRepository(testPool)
+	otaTaskRepo := repository.NewOTATaskRepository(testPool)
 
 	jwtCfg := testCfg.Integration.JWT
 	testJWTService = service.NewJWTService(jwtCfg.Secret, jwtCfg.ExpireHours, testRdb)
@@ -42,11 +45,13 @@ func setupRouter() {
 	authHandler := handler.NewAuthHandler(authService)
 	thingModelHandler := handler.NewThingModelHandler(thingModelRepo, testPool)
 	deviceHandler := handler.NewDeviceHandler(deviceRepo, deviceDataRepo, testPool, testRdb)
-	statsHandler := handler.NewStatsHandler(deviceRepo, thingModelRepo, testPool, testRdb)
+	statsHandler := handler.NewStatsHandler(deviceRepo, thingModelRepo, alertLogRepo, testPool, testRdb)
 	moduleHandler := handler.NewModuleHandler(moduleRepo)
 	alertRuleHandler := handler.NewAlertRuleHandler(alertRuleRepo, testPool, nil)
 	alertLogHandler := handler.NewAlertLogHandler(alertLogRepo, testPool)
 	scheduledTaskHandler := handler.NewScheduledTaskHandler(scheduledTaskRepo, testPool)
+	firmwareHandler := handler.NewFirmwareHandler(firmwareRepo, deviceRepo, testPool)
+	otaTaskHandler := handler.NewOTATaskHandler(otaTaskRepo, firmwareRepo, deviceRepo, testPool, nil, "http://localhost:8080")
 
 	r := gin.New()
 
@@ -118,6 +123,21 @@ func setupRouter() {
 				st.PUT("/:id", scheduledTaskHandler.Update)
 				st.DELETE("/:id", scheduledTaskHandler.Delete)
 			}
+
+			fw := p.Group("/firmwares")
+			{
+				fw.POST("", firmwareHandler.Upload)
+				fw.GET("", firmwareHandler.List)
+				fw.DELETE("/:id", firmwareHandler.Delete)
+			}
+
+			ota := p.Group("/ota-tasks")
+			{
+				ota.POST("", otaTaskHandler.Create)
+				ota.GET("", otaTaskHandler.List)
+				ota.GET("/:id", otaTaskHandler.Get)
+				ota.PUT("/:id/cancel", otaTaskHandler.Cancel)
+			}
 		}
 	}
 
@@ -173,6 +193,29 @@ func parsePage(t *testing.T, data json.RawMessage) pageResp {
 		t.Fatalf("parse page: %v", err)
 	}
 	return p
+}
+
+// doMultipart 发送 multipart/form-data 请求
+func doMultipart(path string, fields map[string]string, fileName string, fileContent []byte, token string) *httptest.ResponseRecorder {
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	for k, v := range fields {
+		w.WriteField(k, v)
+	}
+	if fileName != "" {
+		part, _ := w.CreateFormFile("file", fileName)
+		part.Write(fileContent)
+	}
+	w.Close()
+
+	req, _ := http.NewRequest("POST", path, &buf)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	rec := httptest.NewRecorder()
+	testRouter.ServeHTTP(rec, req)
+	return rec
 }
 
 // registerTestUser 注册测试用户并返回 token

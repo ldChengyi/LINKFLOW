@@ -122,6 +122,12 @@ func (h *EventHook) OnPublished(cl *mochi.Client, pk packets.Packet) {
 		return
 	}
 
+	// OTA 进度上报
+	if strings.Contains(topic, "/ota/up") {
+		go h.handleOTAProgress(deviceID, pk.Payload)
+		return
+	}
+
 	// 从缓存获取设备信息，未命中则查 DB 并缓存
 	info, ok := h.loadDeviceInfo(deviceID)
 	if !ok {
@@ -359,7 +365,53 @@ func (h *EventHook) checkAlertRules(deviceID, userID, deviceName, modelID string
 	}
 }
 
+// handleOTAProgress 处理设备 OTA 进度上报
+func (h *EventHook) handleOTAProgress(deviceID string, payload []byte) {
+	var msg struct {
+		TaskID   string `json:"task_id"`
+		Status   string `json:"status"`
+		Progress int    `json:"progress"`
+		Error    string `json:"error"`
+		Version  string `json:"version"`
+	}
+	if err := json.Unmarshal(payload, &msg); err != nil {
+		logger.Log.Warnf("Invalid OTA progress payload: device_id=%s, err=%v", deviceID, err)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// 更新任务进度
+	if err := h.broker.otaTaskRepo.UpdateProgress(ctx, msg.TaskID, msg.Status, msg.Progress, msg.Error); err != nil {
+		logger.Log.Errorf("Failed to update OTA progress: task=%s, err=%v", msg.TaskID, err)
+		return
+	}
+
+	// OTA 完成时更新设备固件版本
+	if msg.Status == "completed" && msg.Version != "" {
+		h.broker.deviceRepo.UpdateFirmwareVersion(ctx, deviceID, msg.Version)
+	}
+
+	// WebSocket 推送进度
+	info, ok := h.loadDeviceInfo(deviceID)
+	if ok && h.broker.hub != nil {
+		h.broker.hub.SendToUser(info.UserID, &ws.Message{
+			Type: "ota_progress",
+			Data: map[string]interface{}{
+				"task_id":   msg.TaskID,
+				"device_id": deviceID,
+				"status":    msg.Status,
+				"progress":  msg.Progress,
+				"error":     msg.Error,
+			},
+		})
+	}
+
+	logger.Log.Infof("OTA progress: device=%s, task=%s, status=%s, progress=%d", deviceID, msg.TaskID, msg.Status, msg.Progress)
+}
+
 // shouldProcess 判断是否需要处理该 topic 的消息
 func shouldProcess(topic string) bool {
-	return strings.Contains(topic, "/telemetry/up") || strings.Contains(topic, "/event") || strings.Contains(topic, "/voice/up")
+	return strings.Contains(topic, "/telemetry/up") || strings.Contains(topic, "/event") || strings.Contains(topic, "/voice/up") || strings.Contains(topic, "/ota/up")
 }

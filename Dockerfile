@@ -30,6 +30,9 @@ RUN apk add --no-cache ca-certificates tzdata
 # Copy binary
 COPY --from=builder /app/server .
 
+# Create uploads directory
+RUN mkdir -p /app/uploads/firmwares
+
 # Expose port
 EXPOSE 8080
 

@@ -43,6 +43,8 @@ func TestMain(m *testing.M) {
 
 	code := m.Run()
 
+	testPool.Exec(ctx, "DELETE FROM ota_tasks WHERE user_id IN (SELECT id FROM users WHERE email LIKE '%@linkflow.dev')")
+	testPool.Exec(ctx, "DELETE FROM firmwares WHERE user_id IN (SELECT id FROM users WHERE email LIKE '%@linkflow.dev')")
 	testPool.Exec(ctx, "DELETE FROM scheduled_tasks WHERE user_id IN (SELECT id FROM users WHERE email LIKE '%@linkflow.dev')")
 	testPool.Exec(ctx, "DELETE FROM alert_logs WHERE user_id IN (SELECT id FROM users WHERE email LIKE '%@linkflow.dev')")
 	testPool.Exec(ctx, "DELETE FROM alert_rules WHERE user_id IN (SELECT id FROM users WHERE email LIKE '%@linkflow.dev')")

@@ -2,6 +2,8 @@ package mqtt
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 
@@ -90,7 +92,51 @@ func (h *AuthHook) OnConnectAuthenticate(cl *mochi.Client, pk packets.Packet) bo
 		})
 	}(deviceID, device.UserID, device.Name)
 
+	// 异步检查 pending OTA 任务
+	go h.checkPendingOTA(deviceID)
+
 	return true
+}
+
+// checkPendingOTA 设备上线时检查是否有待执行的 OTA 任务
+func (h *AuthHook) checkPendingOTA(deviceID string) {
+	if h.broker.otaTaskRepo == nil {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	tasks, err := h.broker.otaTaskRepo.ListPendingByDeviceID(ctx, deviceID)
+	if err != nil || len(tasks) == 0 {
+		return
+	}
+
+	task := tasks[0]
+	fw, err := h.broker.firmwareRepo.GetByID(ctx, task.FirmwareID)
+	if err != nil {
+		logger.Log.Errorf("checkPendingOTA: firmware not found: %v", err)
+		return
+	}
+
+	downloadURL := fmt.Sprintf("%s/api/firmwares/%s/download", h.broker.baseURL, fw.ID)
+	cmd := map[string]interface{}{
+		"task_id":  task.ID,
+		"version":  fw.Version,
+		"url":      downloadURL,
+		"checksum": fw.Checksum,
+		"size":     fw.FileSize,
+	}
+	payload, _ := json.Marshal(cmd)
+	topic := fmt.Sprintf("devices/%s/ota/down", deviceID)
+
+	if err := h.broker.server.Publish(topic, payload, false, 1); err != nil {
+		logger.Log.Errorf("checkPendingOTA: publish failed: %v", err)
+		return
+	}
+
+	h.broker.otaTaskRepo.UpdateProgress(ctx, task.ID, "pushing", 0, "")
+	logger.Log.Infof("OTA task pushed on connect: device=%s, task=%s", deviceID, task.ID)
 }
 
 // OnACLCheck 主题访问控制：设备只能访问 devices/{自己的ID}/* 下的 topic

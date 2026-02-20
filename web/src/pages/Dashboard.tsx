@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
-  LayoutDashboard, Box, Cpu, Activity, Blocks, ScrollText, LogOut, Menu, X, ChevronDown, Leaf, User, Bell, AlertTriangle, Clock, Palette, Terminal, KeyRound,
+  LayoutDashboard, Box, Cpu, Activity, Blocks, ScrollText, LogOut, Menu, X, ChevronDown, ChevronRight, Leaf, User, Bell, AlertTriangle, Clock, Palette, Terminal, KeyRound, Upload, Radio, Shield,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { authApi, alertLogApi, statsApi } from '../api';
@@ -32,23 +32,50 @@ import AlertLogList from './AlertLogList';
 import ScheduledTaskList from './ScheduledTaskList';
 import ScheduledTaskForm from './ScheduledTaskForm';
 import DeviceDebug from './DeviceDebug';
+import FirmwareList from './FirmwareList';
+import OTATaskList from './OTATaskList';
 
 interface UserInfo {
   user_id: string;
   role: string;
 }
 
-const navItems = [
+interface NavItem {
+  key: string; label: string; icon: any; path: string; badge?: boolean;
+}
+interface NavGroup {
+  group: string; icon: any; items: NavItem[];
+}
+
+const navGroups: (NavItem | NavGroup)[] = [
   { key: 'dashboard', label: '仪表盘', icon: LayoutDashboard, path: '/' },
-  { key: 'thing-models', label: '物模型', icon: Box, path: '/thing-models' },
-  { key: 'devices', label: '设备管理', icon: Cpu, path: '/devices' },
-  { key: 'device-data', label: '设备数据', icon: Activity, path: '/device-data' },
-  { key: 'device-debug', label: '在线调试', icon: Terminal, path: '/device-debug' },
-  { key: 'alert-rules', label: '告警规则', icon: Bell, path: '/alert-rules' },
-  { key: 'alert-logs', label: '告警历史', icon: AlertTriangle, path: '/alert-logs', badge: true },
-  { key: 'scheduled-tasks', label: '定时任务', icon: Clock, path: '/scheduled-tasks' },
-  { key: 'modules', label: '功能模块', icon: Blocks, path: '/modules' },
-  { key: 'audit-logs', label: '审计日志', icon: ScrollText, path: '/audit-logs' },
+  {
+    group: '设备', icon: Cpu, items: [
+      { key: 'thing-models', label: '物模型', icon: Box, path: '/thing-models' },
+      { key: 'devices', label: '设备列表', icon: Cpu, path: '/devices' },
+      { key: 'device-data', label: '设备数据', icon: Activity, path: '/device-data' },
+      { key: 'device-debug', label: '在线调试', icon: Terminal, path: '/device-debug' },
+    ],
+  },
+  {
+    group: '运维', icon: Shield, items: [
+      { key: 'alert-rules', label: '告警规则', icon: Bell, path: '/alert-rules' },
+      { key: 'alert-logs', label: '告警历史', icon: AlertTriangle, path: '/alert-logs', badge: true },
+      { key: 'scheduled-tasks', label: '定时任务', icon: Clock, path: '/scheduled-tasks' },
+    ],
+  },
+  {
+    group: '升级', icon: Radio, items: [
+      { key: 'firmwares', label: '固件管理', icon: Upload, path: '/firmwares' },
+      { key: 'ota-tasks', label: 'OTA升级', icon: Radio, path: '/ota-tasks' },
+    ],
+  },
+  {
+    group: '系统', icon: Blocks, items: [
+      { key: 'modules', label: '功能模块', icon: Blocks, path: '/modules' },
+      { key: 'audit-logs', label: '审计日志', icon: ScrollText, path: '/audit-logs' },
+    ],
+  },
 ];
 
 // 全局 WS 事件总线，子页面可以订阅
@@ -100,6 +127,9 @@ export default function Dashboard() {
   const [stats, setStats] = useState<StatsOverview | null>(null);
   const { theme, setTheme } = useTheme();
   const [alertUnreadCount, setAlertUnreadCount] = useState(0);
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({ '设备': true, '运维': true, '升级': true, '系统': true });
+
+  const toggleGroup = (group: string) => setExpandedGroups((prev) => ({ ...prev, [group]: !prev[group] }));
 
   // 修改密码 Dialog 状态
   const [changePwOpen, setChangePwOpen] = useState(false);
@@ -212,6 +242,8 @@ export default function Dashboard() {
     if (path.startsWith('/alert-rules')) return 'alert-rules';
     if (path.startsWith('/alert-logs')) return 'alert-logs';
     if (path.startsWith('/scheduled-tasks')) return 'scheduled-tasks';
+    if (path.startsWith('/firmwares')) return 'firmwares';
+    if (path.startsWith('/ota-tasks')) return 'ota-tasks';
     return 'dashboard';
   };
 
@@ -237,33 +269,58 @@ export default function Dashboard() {
           )}
         </div>
 
-        <nav className="flex-1 py-4 px-2 space-y-1">
-          {navItems.map((item) => {
-            const isActive = selectedKey === item.key;
-            const showBadge = item.badge && alertUnreadCount > 0;
+        <nav className="flex-1 py-4 px-2 space-y-1 overflow-y-auto">
+          {navGroups.map((entry, idx) => {
+            if ('key' in entry) {
+              const isActive = selectedKey === entry.key;
+              return (
+                <button key={entry.key} onClick={() => navigate(entry.path)}
+                  className={cn('w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors cursor-pointer',
+                    isActive ? 'bg-sidebar-accent text-sidebar-accent-foreground' : 'text-muted-foreground hover:bg-sidebar-accent/50 hover:text-foreground'
+                  )}>
+                  <entry.icon className="h-5 w-5 shrink-0" />
+                  {!collapsed && <span className="flex-1 text-left">{entry.label}</span>}
+                </button>
+              );
+            }
+            const group = entry as NavGroup;
+            const expanded = expandedGroups[group.group];
+            const hasActiveSub = group.items.some((i) => selectedKey === i.key);
             return (
-              <button
-                key={item.key}
-                onClick={() => navigate(item.path)}
-                className={cn(
-                  'w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors cursor-pointer',
-                  isActive
-                    ? 'bg-sidebar-accent text-sidebar-accent-foreground'
-                    : 'text-muted-foreground hover:bg-sidebar-accent/50 hover:text-foreground'
-                )}
-              >
-                <item.icon className="h-5 w-5 shrink-0" />
+              <div key={group.group} className={idx > 0 ? 'pt-2' : ''}>
                 {!collapsed && (
-                  <>
-                    <span className="flex-1 text-left">{item.label}</span>
-                    {showBadge && (
-                      <span className="text-xs bg-destructive text-destructive-foreground rounded-full px-1.5 py-0.5 min-w-[18px] text-center leading-none">
-                        {alertUnreadCount > 99 ? '99+' : alertUnreadCount}
-                      </span>
-                    )}
-                  </>
+                  <button onClick={() => toggleGroup(group.group)}
+                    className={cn('w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer',
+                      hasActiveSub ? 'text-primary' : 'text-muted-foreground hover:text-foreground'
+                    )}>
+                    {expanded ? <ChevronDown className="h-4 w-4 shrink-0" /> : <ChevronRight className="h-4 w-4 shrink-0" />}
+                    <span className="flex-1 text-left">{group.group}</span>
+                  </button>
                 )}
-              </button>
+                {(collapsed || expanded) && group.items.map((item) => {
+                  const isActive = selectedKey === item.key;
+                  const showBadge = item.badge && alertUnreadCount > 0;
+                  return (
+                    <button key={item.key} onClick={() => navigate(item.path)}
+                      className={cn('w-full flex items-center gap-3 rounded-lg text-sm font-medium transition-colors cursor-pointer',
+                        collapsed ? 'px-3 py-2.5' : 'pl-7 pr-3 py-2',
+                        isActive ? 'bg-sidebar-accent text-sidebar-accent-foreground' : 'text-muted-foreground hover:bg-sidebar-accent/50 hover:text-foreground'
+                      )}>
+                      <item.icon className={cn('shrink-0', collapsed ? 'h-5 w-5' : 'h-4 w-4')} />
+                      {!collapsed && (
+                        <>
+                          <span className="flex-1 text-left">{item.label}</span>
+                          {showBadge && (
+                            <span className="text-xs bg-destructive text-destructive-foreground rounded-full px-1.5 py-0.5 min-w-[18px] text-center leading-none">
+                              {alertUnreadCount > 99 ? '99+' : alertUnreadCount}
+                            </span>
+                          )}
+                        </>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
             );
           })}
         </nav>
@@ -341,6 +398,8 @@ export default function Dashboard() {
             <Route path="/scheduled-tasks" element={<ScheduledTaskList />} />
             <Route path="/scheduled-tasks/new" element={<ScheduledTaskForm />} />
             <Route path="/scheduled-tasks/:id/edit" element={<ScheduledTaskForm />} />
+            <Route path="/firmwares" element={<FirmwareList />} />
+            <Route path="/ota-tasks" element={<OTATaskList />} />
           </Routes>
         </main>
       </div>

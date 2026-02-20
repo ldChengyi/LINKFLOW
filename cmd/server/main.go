@@ -85,9 +85,16 @@ func main() {
 	deviceDataRepo := repository.NewDeviceDataRepository(db.Admin())
 	mqttAlertRuleRepo := repository.NewAlertRuleRepository(db.Admin())
 	mqttAlertLogRepo := repository.NewAlertLogRepository(db.Admin())
+	mqttOTATaskRepo := repository.NewOTATaskRepository(db.Admin())
+	mqttFirmwareRepo := repository.NewFirmwareRepository(db.Admin())
+
+	// OTA Repository（App pool，受 RLS 约束）
+	firmwareRepoApp := repository.NewFirmwareRepository(db.App())
+	otaTaskRepoApp := repository.NewOTATaskRepository(db.App())
 
 	// 初始化 MQTT Broker
-	broker := mqttbroker.NewBroker(cfg.MQTT, mqttDeviceRepo, mqttThingModelRepo, deviceDataRepo, auditLogRepo, mqttAlertRuleRepo, mqttAlertLogRepo, rdb, hub)
+	baseURL := "http://localhost:" + cfg.Server.Port
+	broker := mqttbroker.NewBroker(cfg.MQTT, mqttDeviceRepo, mqttThingModelRepo, deviceDataRepo, auditLogRepo, mqttAlertRuleRepo, mqttAlertLogRepo, mqttOTATaskRepo, mqttFirmwareRepo, rdb, hub, baseURL)
 	if err := broker.Start(); err != nil {
 		logger.Log.Fatalf("Failed to start MQTT broker: %v", err)
 	}
@@ -109,6 +116,8 @@ func main() {
 	alertLogHandler := handler.NewAlertLogHandler(alertLogRepoApp, db.App())
 	scheduledTaskHandler := handler.NewScheduledTaskHandler(scheduledTaskRepoApp, db.App())
 	debugHandler := handler.NewDebugHandler(deviceRepo, thingModelRepo, deviceDataRepo, db.App(), rdb, broker)
+	firmwareHandler := handler.NewFirmwareHandler(firmwareRepoApp, mqttDeviceRepo, db.App())
+	otaTaskHandler := handler.NewOTATaskHandler(otaTaskRepoApp, firmwareRepoApp, deviceRepo, db.App(), broker, baseURL)
 
 	// 设置路由
 	router := gin.Default()
@@ -131,6 +140,9 @@ func main() {
 
 		// WebSocket（token 通过 query param 认证，不走 Auth 中间件）
 		api.GET("/ws", wsHandler.Connect)
+
+		// 固件下载（设备通过 Basic Auth 认证，不走 JWT）
+		api.GET("/firmwares/:id/download", firmwareHandler.Download)
 
 		// 需要认证的路由
 		protected := api.Group("")
@@ -210,6 +222,23 @@ func main() {
 
 			// 审计日志路由（admin 查所有，普通用户查自己的）
 			protected.GET("/audit-logs", auditLogHandler.List)
+
+			// 固件管理路由
+			firmwares := protected.Group("/firmwares")
+			{
+				firmwares.POST("", firmwareHandler.Upload)
+				firmwares.GET("", firmwareHandler.List)
+				firmwares.DELETE("/:id", firmwareHandler.Delete)
+			}
+
+			// OTA 任务路由
+			otaTasks := protected.Group("/ota-tasks")
+			{
+				otaTasks.POST("", otaTaskHandler.Create)
+				otaTasks.GET("", otaTaskHandler.List)
+				otaTasks.GET("/:id", otaTaskHandler.Get)
+				otaTasks.PUT("/:id/cancel", otaTaskHandler.Cancel)
+			}
 		}
 	}
 

@@ -83,7 +83,9 @@ linkflow/
 │   │   ├── alert_rule.go           # 告警规则 CRUD 处理器
 │   │   ├── alert_log.go            # 告警日志查询处理器
 │   │   ├── scheduled_task.go       # 定时任务 CRUD 处理器
-│   │   └── debug.go                # 设备在线调试处理器（模拟上下线 + 指令下发）
+│   │   ├── debug.go                # 设备在线调试处理器（模拟上下线 + 指令下发）
+│   │   ├── firmware.go             # 固件管理处理器（上传/下载/列表/删除）
+│   │   └── ota_task.go             # OTA升级任务处理器（创建/列表/取消）
 │   ├── logger/logger.go            # zap 日志封装
 │   ├── middleware/auth.go          # JWT 认证中间件
 │   ├── mqtt/
@@ -102,7 +104,8 @@ linkflow/
 │   │   ├── device.go               # 设备模型
 │   │   ├── module.go               # 功能模块模型 + 语音指令结构
 │   │   ├── alert.go                # 告警规则 + 告警日志模型
-│   │   └── scheduled_task.go       # 定时任务模型
+│   │   ├── scheduled_task.go       # 定时任务模型
+│   │   └── ota.go                  # 固件 + OTA任务模型
 │   ├── repository/
 │   │   ├── user.go                 # 用户数据访问
 │   │   ├── thing_model.go          # 物模型数据访问
@@ -111,7 +114,9 @@ linkflow/
 │   │   ├── module.go               # 功能模块数据访问
 │   │   ├── alert_rule.go           # 告警规则数据访问
 │   │   ├── alert_log.go            # 告警日志数据访问
-│   │   └── scheduled_task.go       # 定时任务数据访问
+│   │   ├── scheduled_task.go       # 定时任务数据访问
+│   │   ├── firmware.go             # 固件数据访问
+│   │   └── ota_task.go             # OTA任务数据访问
 │   ├── service/
 │   │   ├── auth.go                 # 认证业务逻辑
 │   │   ├── jwt.go                  # JWT + Redis 校验
@@ -127,7 +132,8 @@ linkflow/
 │   ├── 005_modules.sql             # 功能模块表 + 物模型 modules 字段
 │   ├── 007_alert_system.sql        # 告警规则表 + 告警日志表 + RLS
 │   ├── 008_scheduled_tasks.sql     # 定时任务表 + RLS
-│   └── 009_alert_enhancements.sql  # 告警冷却字段 + 告警确认字段
+│   ├── 009_alert_enhancements.sql  # 告警冷却字段 + 告警确认字段
+│   └── 010_ota_system.sql          # 固件表 + OTA任务表 + RLS + 设备firmware_version字段
 ├── web/                             # 前端项目
 │   ├── src/
 │   │   ├── api/index.ts            # Axios API 客户端
@@ -149,7 +155,9 @@ linkflow/
 │   │   │   ├── AlertLogList.tsx    # 告警历史（实时新告警推送）
 │   │   │   ├── ScheduledTaskList.tsx # 定时任务列表
 │   │   │   ├── ScheduledTaskForm.tsx # 定时任务创建/编辑
-│   │   │   └── DeviceDebug.tsx      # 设备在线调试（模拟上下线 + 属性下发 + 服务调用）
+│   │   │   ├── DeviceDebug.tsx      # 设备在线调试（模拟上下线 + 属性下发 + 服务调用）
+│   │   │   ├── FirmwareList.tsx    # 固件管理（上传/列表/删除）
+│   │   │   └── OTATaskList.tsx     # OTA升级任务（创建/列表/取消 + 实时进度）
 │   │   ├── App.tsx                 # 路由配置
 │   │   └── main.tsx                # 入口文件
 │   ├── Dockerfile                   # 前端镜像（Nginx）
@@ -345,6 +353,16 @@ linkflow/
     - 覆盖 alert_rule / alert_log / auth 等资源类型的 actionMap
     - 前端：AuditLogList 页面展示审计日志（用户、操作、资源、时间、IP）
 
+26. **OTA 固件升级**
+    - 固件管理：上传固件文件（.bin/.hex/.elf）、SHA256 校验、本地文件存储（uploads/firmwares/）
+    - OTA 任务：创建升级任务 → MQTT 推送命令 → 设备下载固件 → 上报进度 → 完成/失败
+    - MQTT Topic：`devices/{id}/ota/down`（服务端→设备）、`devices/{id}/ota/up`（设备→服务端进度）
+    - 固件下载：HTTP Basic Auth（device_id:device_secret），设备通过 HTTP 下载固件文件
+    - 设备上线自动推送：设备连接时检查 pending OTA 任务并自动推送
+    - 设备 firmware_version 字段：OTA 完成后自动更新设备固件版本
+    - WebSocket 实时进度推送（ota_progress 消息类型）
+    - 前端：固件管理页（上传/列表/删除）+ OTA任务页（创建/列表/取消 + 实时进度条）
+
 ------
 
 ## API 端点
@@ -391,6 +409,14 @@ linkflow/
 | POST   | /api/devices/:id/simulate/online | 模拟设备上线       | 是   |
 | POST   | /api/devices/:id/simulate/offline | 模拟设备下线      | 是   |
 | POST   | /api/devices/:id/simulate/heartbeat | 模拟上线心跳续期 | 是   |
+| POST   | /api/firmwares              | 上传固件（multipart）| 是   |
+| GET    | /api/firmwares              | 固件列表           | 是   |
+| DELETE | /api/firmwares/:id          | 删除固件           | 是   |
+| GET    | /api/firmwares/:id/download | 固件下载（Basic Auth）| 否(Basic) |
+| POST   | /api/ota-tasks              | 创建OTA升级任务    | 是   |
+| GET    | /api/ota-tasks              | OTA任务列表（?device_id） | 是   |
+| GET    | /api/ota-tasks/:id          | OTA任务详情        | 是   |
+| PUT    | /api/ota-tasks/:id/cancel   | 取消OTA任务        | 是   |
 
 ------
 
@@ -448,7 +474,7 @@ docker-compose logs -f web
 - [x] 告警确认 + 未读角标（acknowledge API + 侧边栏角标）
 - [x] 审计日志（操作记录中间件 + 前端查询页面）
 - [ ] 视频接入（RTMP）
-- [ ] OTA 固件升级（固件仓库 + 标准化 MQTT 协议 + 多设备类型支持 + 灰度发布策略）
+- [x] OTA 固件升级（固件管理 + MQTT推送 + HTTP下载 + 进度上报 + 设备上线自动推送）
 - [ ] 设备影子（Device Shadow，desired/reported 双状态 + 离线同步 delta）
 - [ ] 数据聚合查询（TimescaleDB time_bucket，支持 avg/max/min + 长时间范围图表）
 - [ ] 多渠道告警通知（SMTP 邮件 + 钉钉/企业微信 Webhook）
@@ -472,6 +498,8 @@ devices/{device_id}/service/invoke    # 服务调用下发（设备 SUB）
 devices/{device_id}/service/reply     # 服务执行结果回传（设备 PUB）
 devices/{device_id}/voice/up          # 语音文本上报（设备 PUB）
 devices/{device_id}/voice/down        # 语音执行结果回传（设备 SUB）
+devices/{device_id}/ota/down          # OTA升级命令下发（设备 SUB）
+devices/{device_id}/ota/up            # OTA进度上报（设备 PUB）
 ```
 
 ### 设备认证

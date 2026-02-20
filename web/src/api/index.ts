@@ -358,4 +358,47 @@ export const scheduledTaskApi = {
   delete: (id: string) => api.delete(`/scheduled-tasks/${id}`),
 };
 
+// 固件相关类型
+export interface Firmware {
+  id: string;
+  user_id: string;
+  name: string;
+  version: string;
+  file_size: number;
+  checksum: string;
+  description: string;
+  created_at: string;
+}
+
+export const firmwareApi = {
+  list: (page = 1, pageSize = 10) =>
+    api.get<ListResponse<Firmware>>('/firmwares', { params: { page, page_size: pageSize } }),
+  upload: (formData: FormData) =>
+    api.post<Firmware>('/firmwares', formData, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 60000 }),
+  delete: (id: string) => api.delete(`/firmwares/${id}`),
+};
+
+// OTA 任务相关类型
+export interface OTATask {
+  id: string;
+  user_id: string;
+  device_id: string;
+  device_name: string;
+  firmware_id: string;
+  firmware_version: string;
+  status: 'pending' | 'pushing' | 'downloading' | 'installing' | 'completed' | 'failed' | 'cancelled';
+  progress: number;
+  error_msg: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export const otaTaskApi = {
+  list: (page = 1, pageSize = 10, deviceId?: string) =>
+    api.get<ListResponse<OTATask>>('/ota-tasks', { params: { page, page_size: pageSize, ...(deviceId ? { device_id: deviceId } : {}) } }),
+  get: (id: string) => api.get<OTATask>(`/ota-tasks/${id}`),
+  create: (data: { device_id: string; firmware_id: string }) => api.post<OTATask>('/ota-tasks', data),
+  cancel: (id: string) => api.put(`/ota-tasks/${id}/cancel`),
+};
+
 export default api;

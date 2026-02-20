@@ -75,10 +75,10 @@ func (r *DeviceRepository) Create(ctx context.Context, userID string, req *model
 	err = r.queryRow(ctx, `
 		INSERT INTO devices (user_id, model_id, name, device_secret, metadata)
 		VALUES ($1, $2, $3, $4, $5)
-		RETURNING id, user_id, model_id, name, device_secret, status, last_online_at, metadata, created_at, updated_at
+		RETURNING id, user_id, model_id, name, device_secret, status, last_online_at, firmware_version, metadata, created_at, updated_at
 	`, userID, nullUUID(req.ModelID), req.Name, secret, metadata).Scan(
 		&db.ID, &db.UserID, &db.ModelID, &db.Name, &db.DeviceSecret,
-		&db.Status, &db.LastOnlineAt, &db.Metadata, &db.CreatedAt, &db.UpdatedAt,
+		&db.Status, &db.LastOnlineAt, &db.FirmwareVersion, &db.Metadata, &db.CreatedAt, &db.UpdatedAt,
 	)
 	if err != nil {
 		return nil, err
@@ -91,14 +91,14 @@ func (r *DeviceRepository) GetByID(ctx context.Context, id string) (*model.Devic
 	var db model.DeviceDB
 	err := r.queryRow(ctx, `
 		SELECT d.id, d.user_id, d.model_id, tm.name AS model_name,
-		       d.name, d.device_secret, d.status, d.last_online_at, d.metadata,
+		       d.name, d.device_secret, d.status, d.last_online_at, d.firmware_version, d.metadata,
 		       d.created_at, d.updated_at
 		FROM devices d
 		LEFT JOIN thing_models tm ON d.model_id = tm.id
 		WHERE d.id = $1
 	`, id).Scan(
 		&db.ID, &db.UserID, &db.ModelID, &db.ModelName,
-		&db.Name, &db.DeviceSecret, &db.Status, &db.LastOnlineAt, &db.Metadata,
+		&db.Name, &db.DeviceSecret, &db.Status, &db.LastOnlineAt, &db.FirmwareVersion, &db.Metadata,
 		&db.CreatedAt, &db.UpdatedAt,
 	)
 	if err != nil {
@@ -117,7 +117,7 @@ func (r *DeviceRepository) List(ctx context.Context, offset, limit int) ([]*mode
 
 	rows, err := r.query(ctx, `
 		SELECT d.id, d.user_id, d.model_id, tm.name AS model_name,
-		       d.name, d.device_secret, d.status, d.last_online_at, d.metadata,
+		       d.name, d.device_secret, d.status, d.last_online_at, d.firmware_version, d.metadata,
 		       d.created_at, d.updated_at
 		FROM devices d
 		LEFT JOIN thing_models tm ON d.model_id = tm.id
@@ -134,7 +134,7 @@ func (r *DeviceRepository) List(ctx context.Context, offset, limit int) ([]*mode
 		var db model.DeviceDB
 		err := rows.Scan(
 			&db.ID, &db.UserID, &db.ModelID, &db.ModelName,
-			&db.Name, &db.DeviceSecret, &db.Status, &db.LastOnlineAt, &db.Metadata,
+			&db.Name, &db.DeviceSecret, &db.Status, &db.LastOnlineAt, &db.FirmwareVersion, &db.Metadata,
 			&db.CreatedAt, &db.UpdatedAt,
 		)
 		if err != nil {
@@ -161,10 +161,10 @@ func (r *DeviceRepository) Update(ctx context.Context, id string, req *model.Upd
 		UPDATE devices
 		SET name = $2, model_id = $3, metadata = $4, updated_at = NOW()
 		WHERE id = $1
-		RETURNING id, user_id, model_id, name, device_secret, status, last_online_at, metadata, created_at, updated_at
+		RETURNING id, user_id, model_id, name, device_secret, status, last_online_at, firmware_version, metadata, created_at, updated_at
 	`, id, req.Name, nullUUID(req.ModelID), metadata).Scan(
 		&db.ID, &db.UserID, &db.ModelID, &db.Name, &db.DeviceSecret,
-		&db.Status, &db.LastOnlineAt, &db.Metadata, &db.CreatedAt, &db.UpdatedAt,
+		&db.Status, &db.LastOnlineAt, &db.FirmwareVersion, &db.Metadata, &db.CreatedAt, &db.UpdatedAt,
 	)
 	if err != nil {
 		return nil, err
@@ -182,14 +182,14 @@ func (r *DeviceRepository) AuthenticateDevice(ctx context.Context, deviceID, dev
 	var db model.DeviceDB
 	err := r.pool.QueryRow(ctx, `
 		SELECT d.id, d.user_id, d.model_id, tm.name AS model_name,
-		       d.name, d.device_secret, d.status, d.last_online_at, d.metadata,
+		       d.name, d.device_secret, d.status, d.last_online_at, d.firmware_version, d.metadata,
 		       d.created_at, d.updated_at
 		FROM devices d
 		LEFT JOIN thing_models tm ON d.model_id = tm.id
 		WHERE d.id = $1 AND d.device_secret = $2
 	`, deviceID, deviceSecret).Scan(
 		&db.ID, &db.UserID, &db.ModelID, &db.ModelName,
-		&db.Name, &db.DeviceSecret, &db.Status, &db.LastOnlineAt, &db.Metadata,
+		&db.Name, &db.DeviceSecret, &db.Status, &db.LastOnlineAt, &db.FirmwareVersion, &db.Metadata,
 		&db.CreatedAt, &db.UpdatedAt,
 	)
 	if err != nil {
@@ -218,7 +218,7 @@ func (r *DeviceRepository) Count(ctx context.Context) (int, error) {
 func (r *DeviceRepository) ListByUserID(ctx context.Context, userID string) ([]*model.Device, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT d.id, d.user_id, d.model_id, tm.name AS model_name,
-		       d.name, d.device_secret, d.status, d.last_online_at, d.metadata,
+		       d.name, d.device_secret, d.status, d.last_online_at, d.firmware_version, d.metadata,
 		       d.created_at, d.updated_at
 		FROM devices d
 		LEFT JOIN thing_models tm ON d.model_id = tm.id
@@ -235,7 +235,7 @@ func (r *DeviceRepository) ListByUserID(ctx context.Context, userID string) ([]*
 		var db model.DeviceDB
 		err := rows.Scan(
 			&db.ID, &db.UserID, &db.ModelID, &db.ModelName,
-			&db.Name, &db.DeviceSecret, &db.Status, &db.LastOnlineAt, &db.Metadata,
+			&db.Name, &db.DeviceSecret, &db.Status, &db.LastOnlineAt, &db.FirmwareVersion, &db.Metadata,
 			&db.CreatedAt, &db.UpdatedAt,
 		)
 		if err != nil {
@@ -248,4 +248,10 @@ func (r *DeviceRepository) ListByUserID(ctx context.Context, userID string) ([]*
 		devices = append(devices, d)
 	}
 	return devices, nil
+}
+
+// UpdateFirmwareVersion 更新设备固件版本（OTA 完成时调用，绕过 RLS）
+func (r *DeviceRepository) UpdateFirmwareVersion(ctx context.Context, deviceID, version string) error {
+	_, err := r.pool.Exec(ctx, `UPDATE devices SET firmware_version = $2 WHERE id = $1`, deviceID, version)
+	return err
 }

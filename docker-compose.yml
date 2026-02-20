@@ -24,6 +24,8 @@ services:
       - "8080"
     ports:
       - "${MQTT_PORT:-1883}:1883"
+    volumes:
+      - uploads_data:/app/uploads
     depends_on:
       postgres:
         condition: service_healthy
@@ -70,3 +72,4 @@ services:
 volumes:
   postgres_data:
   redis_data:
+  uploads_data:

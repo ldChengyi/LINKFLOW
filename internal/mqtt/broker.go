@@ -33,8 +33,11 @@ type Broker struct {
 	auditLogRepo   *repository.AuditLogRepository
 	alertRuleRepo  *repository.AlertRuleRepository
 	alertLogRepo   *repository.AlertLogRepository
+	otaTaskRepo    *repository.OTATaskRepository
+	firmwareRepo   *repository.FirmwareRepository
 	rdb            *cache.Redis
 	hub            *ws.Hub
+	baseURL        string
 
 	// 已连接设备缓存: device_id → DeviceInfo
 	devices sync.Map
@@ -53,8 +56,11 @@ func NewBroker(
 	auditLogRepo *repository.AuditLogRepository,
 	alertRuleRepo *repository.AlertRuleRepository,
 	alertLogRepo *repository.AlertLogRepository,
+	otaTaskRepo *repository.OTATaskRepository,
+	firmwareRepo *repository.FirmwareRepository,
 	rdb *cache.Redis,
 	hub *ws.Hub,
+	baseURL string,
 ) *Broker {
 	return &Broker{
 		config:         cfg,
@@ -64,8 +70,11 @@ func NewBroker(
 		auditLogRepo:   auditLogRepo,
 		alertRuleRepo:  alertRuleRepo,
 		alertLogRepo:   alertLogRepo,
+		otaTaskRepo:    otaTaskRepo,
+		firmwareRepo:   firmwareRepo,
 		rdb:            rdb,
 		hub:            hub,
+		baseURL:        baseURL,
 	}
 }
 

@@ -15,9 +15,10 @@ type Device struct {
 	DeviceSecret string                 `json:"device_secret"`
 	Status       string                 `json:"status"`
 	LastOnlineAt *time.Time             `json:"last_online_at"`
-	Metadata     map[string]interface{} `json:"metadata"`
-	CreatedAt    time.Time              `json:"created_at"`
-	UpdatedAt    time.Time              `json:"updated_at"`
+	FirmwareVersion string                 `json:"firmware_version"`
+	Metadata        map[string]interface{} `json:"metadata"`
+	CreatedAt       time.Time              `json:"created_at"`
+	UpdatedAt       time.Time              `json:"updated_at"`
 }
 
 // DeviceDB 数据库存储结构
@@ -28,9 +29,10 @@ type DeviceDB struct {
 	ModelName    *string    `db:"model_name"`
 	Name         string     `db:"name"`
 	DeviceSecret string     `db:"device_secret"`
-	Status       string     `db:"status"`
-	LastOnlineAt *time.Time `db:"last_online_at"`
-	Metadata     []byte     `db:"metadata"`
+	Status          string     `db:"status"`
+	LastOnlineAt    *time.Time `db:"last_online_at"`
+	FirmwareVersion string     `db:"firmware_version"`
+	Metadata        []byte     `db:"metadata"`
 	CreatedAt    time.Time  `db:"created_at"`
 	UpdatedAt    time.Time  `db:"updated_at"`
 }
@@ -43,9 +45,10 @@ func (db *DeviceDB) ToModel() (*Device, error) {
 		ModelID:      db.ModelID,
 		Name:         db.Name,
 		DeviceSecret: db.DeviceSecret,
-		Status:       db.Status,
-		LastOnlineAt: db.LastOnlineAt,
-		CreatedAt:    db.CreatedAt,
+		Status:          db.Status,
+		LastOnlineAt:    db.LastOnlineAt,
+		FirmwareVersion: db.FirmwareVersion,
+		CreatedAt:       db.CreatedAt,
 		UpdatedAt:    db.UpdatedAt,
 	}
 	if db.ModelName != nil {
