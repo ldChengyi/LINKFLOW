@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from 'react';
 import { toast } from 'sonner';
-import { Activity, RefreshCw, Copy, Check, Mic, Blocks, Clock } from 'lucide-react';
+import { Activity, RefreshCw, Copy, Check, Mic, Blocks, Clock, Download } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { deviceApi, thingModelApi } from '../api';
 import type { Device, ThingModel, DeviceLatestData, DeviceHistoryData, Property } from '../api';
@@ -25,6 +25,7 @@ export default function DeviceData() {
   const [historyData, setHistoryData] = useState<DeviceHistoryData[]>([]);
   const [historyRange, setHistoryRange] = useState('1h');
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
     fetchDevices();
@@ -98,6 +99,27 @@ export default function DeviceData() {
   useEffect(() => {
     if (selectedId && historyRange) fetchHistory(historyRange);
   }, [selectedId, historyRange]);
+
+  const handleExportCSV = async () => {
+    if (!selectedId) return;
+    setExporting(true);
+    const end = new Date().toISOString();
+    const ms: Record<string, number> = { '1h': 3600000, '6h': 21600000, '24h': 86400000, '7d': 604800000 };
+    const start = new Date(Date.now() - (ms[historyRange] || 3600000)).toISOString();
+    try {
+      const res = await deviceApi.exportHistory(selectedId, start, end, 1000);
+      const url = URL.createObjectURL(new Blob([res.data as BlobPart], { type: 'text/csv;charset=utf-8;' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `device_${selectedId.slice(0, 8)}_${historyRange}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      toast.error('导出失败');
+    } finally {
+      setExporting(false);
+    }
+  };
 
   const numericProps = useMemo(() =>
     (thingModel?.properties || []).filter(p => p.dataType === 'int' || p.dataType === 'float'),
@@ -732,11 +754,17 @@ export default function DeviceData() {
               <CardHeader className="pb-3">
                 <div className="flex items-center justify-between">
                   <CardTitle className="text-base">历史趋势</CardTitle>
-                  <div className="flex gap-1">
-                    {['1h', '6h', '24h', '7d'].map(r => (
-                      <Button key={r} size="sm" variant={historyRange === r ? 'default' : 'outline'}
-                        onClick={() => setHistoryRange(r)}>{r === '1h' ? '1小时' : r === '6h' ? '6小时' : r === '24h' ? '24小时' : '7天'}</Button>
-                    ))}
+                  <div className="flex items-center gap-2">
+                    <div className="flex gap-1">
+                      {['1h', '6h', '24h', '7d'].map(r => (
+                        <Button key={r} size="sm" variant={historyRange === r ? 'default' : 'outline'}
+                          onClick={() => setHistoryRange(r)}>{r === '1h' ? '1小时' : r === '6h' ? '6小时' : r === '24h' ? '24小时' : '7天'}</Button>
+                      ))}
+                    </div>
+                    <Button size="sm" variant="outline" onClick={handleExportCSV} disabled={exporting || !selectedId}>
+                      <Download className="h-4 w-4 mr-1" />
+                      {exporting ? '导出中...' : '导出 CSV'}
+                    </Button>
                   </div>
                 </div>
               </CardHeader>

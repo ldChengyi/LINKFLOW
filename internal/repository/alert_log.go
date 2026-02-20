@@ -31,6 +31,15 @@ func (r *AlertLogRepository) query(ctx context.Context, sql string, args ...any)
 	return r.pool.Query(ctx, sql, args...)
 }
 
+func (r *AlertLogRepository) exec(ctx context.Context, sql string, args ...any) error {
+	if conn := database.RLSConn(ctx); conn != nil {
+		_, err := conn.Exec(ctx, sql, args...)
+		return err
+	}
+	_, err := r.pool.Exec(ctx, sql, args...)
+	return err
+}
+
 // Create 写入告警日志（MQTT 触发，绕过 RLS）
 func (r *AlertLogRepository) Create(ctx context.Context, log *model.AlertLog) error {
 	_, err := r.pool.Exec(ctx, `
@@ -61,7 +70,7 @@ func (r *AlertLogRepository) List(ctx context.Context, offset, limit int, device
 		query = `
 			SELECT id, COALESCE(rule_id::text, ''), user_id, device_id, device_name,
 			       property_id, property_name, operator, threshold, actual_value,
-			       severity, rule_name, created_at
+			       severity, rule_name, acknowledged, acknowledged_at, created_at
 			FROM alert_logs
 			WHERE device_id = $3
 			ORDER BY created_at DESC
@@ -71,7 +80,7 @@ func (r *AlertLogRepository) List(ctx context.Context, offset, limit int, device
 		query = `
 			SELECT id, COALESCE(rule_id::text, ''), user_id, device_id, device_name,
 			       property_id, property_name, operator, threshold, actual_value,
-			       severity, rule_name, created_at
+			       severity, rule_name, acknowledged, acknowledged_at, created_at
 			FROM alert_logs
 			ORDER BY created_at DESC
 			OFFSET $1 LIMIT $2`
@@ -90,7 +99,7 @@ func (r *AlertLogRepository) List(ctx context.Context, offset, limit int, device
 		err := rows.Scan(
 			&l.ID, &l.RuleID, &l.UserID, &l.DeviceID, &l.DeviceName,
 			&l.PropertyID, &l.PropertyName, &l.Operator, &l.Threshold, &l.ActualValue,
-			&l.Severity, &l.RuleName, &l.CreatedAt,
+			&l.Severity, &l.RuleName, &l.Acknowledged, &l.AcknowledgedAt, &l.CreatedAt,
 		)
 		if err != nil {
 			return nil, 0, err
@@ -98,4 +107,27 @@ func (r *AlertLogRepository) List(ctx context.Context, offset, limit int, device
 		logs = append(logs, &l)
 	}
 	return logs, total, nil
+}
+
+// Acknowledge 确认告警（RLS 连接，只能确认自己的）
+func (r *AlertLogRepository) Acknowledge(ctx context.Context, id int64) error {
+	return r.exec(ctx, `
+		UPDATE alert_logs
+		SET acknowledged = true, acknowledged_at = NOW()
+		WHERE id = $1 AND acknowledged = false
+	`, id)
+}
+
+// CountUnacknowledged 统计未确认告警数（RLS 连接）
+func (r *AlertLogRepository) CountUnacknowledged(ctx context.Context) (int, error) {
+	var count int
+	err := r.queryRow(ctx, `SELECT COUNT(*) FROM alert_logs WHERE acknowledged = false`).Scan(&count)
+	return count, err
+}
+
+// CountToday 统计今日告警数（RLS 连接）
+func (r *AlertLogRepository) CountToday(ctx context.Context) (int, error) {
+	var count int
+	err := r.queryRow(ctx, `SELECT COUNT(*) FROM alert_logs WHERE created_at >= CURRENT_DATE`).Scan(&count)
+	return count, err
 }

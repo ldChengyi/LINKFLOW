@@ -21,6 +21,9 @@ const resourceTypeMap: Record<string, { label: string; variant: string }> = {
   auth: { label: '认证', variant: 'outline' },
   thing_model: { label: '物模型', variant: 'secondary' },
   device: { label: '设备', variant: 'success' },
+  scheduled_task: { label: '定时任务', variant: 'outline' },
+  alert_rule: { label: '告警规则', variant: 'secondary' },
+  alert_log: { label: '告警日志', variant: 'outline' },
 };
 
 export default function AuditLogList() {

@@ -57,11 +57,17 @@ export interface AuthResponse {
   };
 }
 
+export interface ChangePasswordRequest {
+  old_password: string;
+  new_password: string;
+}
+
 export const authApi = {
   login: (data: LoginRequest) => api.post<AuthResponse>('/auth/login', data),
   register: (data: RegisterRequest) => api.post<AuthResponse>('/auth/register', data),
   logout: () => api.post('/auth/logout'),
   me: () => api.get('/me'),
+  changePassword: (data: ChangePasswordRequest) => api.put('/auth/password', data),
 };
 
 // 物模型相关类型
@@ -186,6 +192,8 @@ export const deviceApi = {
   latestData: (id: string) => api.get<DeviceLatestData | null>(`/devices/${id}/data/latest`),
   dataHistory: (id: string, start: string, end: string, limit = 200) =>
     api.get<DeviceHistoryData[]>(`/devices/${id}/data/history`, { params: { start, end, limit } }),
+  exportHistory: (id: string, start: string, end: string, limit = 1000) =>
+    api.get(`/devices/${id}/data/export`, { params: { start, end, limit }, responseType: 'blob' }),
   debug: (id: string, data: { action_type: string; property_id?: string; properties?: Record<string, unknown>; service_id?: string; value?: unknown }) =>
     api.post(`/devices/${id}/debug`, data),
   connectionType: (id: string) => api.get<{ device_id: string; connection_type: 'real' | 'simulated' | 'offline' }>(`/devices/${id}/connection-type`),
@@ -199,6 +207,7 @@ export interface StatsOverview {
   total_devices: number;
   online_devices: number;
   total_thing_models: number;
+  today_alerts: number;
 }
 
 export const statsApi = {
@@ -261,6 +270,7 @@ export interface AlertRule {
   threshold: number;
   severity: 'info' | 'warning' | 'critical';
   enabled: boolean;
+  cooldown_minutes: number;
   created_at: string;
   updated_at: string;
 }
@@ -273,6 +283,7 @@ export interface AlertRuleRequest {
   threshold: number;
   severity: string;
   enabled: boolean;
+  cooldown_minutes?: number;
 }
 
 export interface AlertLog {
@@ -288,6 +299,8 @@ export interface AlertLog {
   actual_value: number;
   severity: string;
   rule_name: string;
+  acknowledged: boolean;
+  acknowledged_at?: string;
   created_at: string;
 }
 
@@ -303,6 +316,8 @@ export const alertRuleApi = {
 export const alertLogApi = {
   list: (page = 1, pageSize = 20, deviceId?: string) =>
     api.get<ListResponse<AlertLog>>('/alert-logs', { params: { page, page_size: pageSize, ...(deviceId ? { device_id: deviceId } : {}) } }),
+  acknowledge: (id: number) => api.put(`/alert-logs/${id}/acknowledge`),
+  unreadCount: () => api.get<{ count: number }>('/alert-logs/unread-count'),
 };
 
 // 定时任务相关类型

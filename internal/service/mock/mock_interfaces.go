@@ -88,6 +88,20 @@ func (mr *MockUserRepoMockRecorder) GetByID(ctx, id any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetByID", reflect.TypeOf((*MockUserRepo)(nil).GetByID), ctx, id)
 }
 
+// UpdatePassword mocks base method.
+func (m *MockUserRepo) UpdatePassword(ctx context.Context, userID, passwordHash string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpdatePassword", ctx, userID, passwordHash)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// UpdatePassword indicates an expected call of UpdatePassword.
+func (mr *MockUserRepoMockRecorder) UpdatePassword(ctx, userID, passwordHash any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdatePassword", reflect.TypeOf((*MockUserRepo)(nil).UpdatePassword), ctx, userID, passwordHash)
+}
+
 // MockTokenStore is a mock of TokenStore interface.
 type MockTokenStore struct {
 	ctrl     *gomock.Controller

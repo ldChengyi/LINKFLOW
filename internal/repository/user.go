@@ -83,6 +83,15 @@ func (r *UserRepository) GetByID(ctx context.Context, id string) (*model.User, e
 	return &user, nil
 }
 
+// UpdatePassword 更新用户密码哈希
+func (r *UserRepository) UpdatePassword(ctx context.Context, userID, passwordHash string) error {
+	_, err := r.pool.Exec(ctx,
+		`UPDATE users SET password_hash = $2, updated_at = NOW() WHERE id = $1`,
+		userID, passwordHash,
+	)
+	return err
+}
+
 func isDuplicateKeyError(err error) bool {
 	return err != nil && contains(err.Error(), "duplicate key")
 }

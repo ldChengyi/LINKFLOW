@@ -12,6 +12,7 @@ type UserRepo interface {
 	Create(ctx context.Context, email, passwordHash string, role model.UserRole) (*model.User, error)
 	GetByEmail(ctx context.Context, email string) (*model.User, error)
 	GetByID(ctx context.Context, id string) (*model.User, error)
+	UpdatePassword(ctx context.Context, userID, passwordHash string) error
 }
 
 // TokenStore token 存储接口（Redis 操作子集）

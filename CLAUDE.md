@@ -126,7 +126,8 @@ linkflow/
 │   ├── 004_device_data_hypertable.sql # 遥测数据时序表
 │   ├── 005_modules.sql             # 功能模块表 + 物模型 modules 字段
 │   ├── 007_alert_system.sql        # 告警规则表 + 告警日志表 + RLS
-│   └── 008_scheduled_tasks.sql     # 定时任务表 + RLS
+│   ├── 008_scheduled_tasks.sql     # 定时任务表 + RLS
+│   └── 009_alert_enhancements.sql  # 告警冷却字段 + 告警确认字段
 ├── web/                             # 前端项目
 │   ├── src/
 │   │   ├── api/index.ts            # Axios API 客户端
@@ -317,6 +318,33 @@ linkflow/
     - 真实连接保护：真实 MQTT 连接的设备禁止模拟上下线操作
     - 前端：连接类型 Badge（MQTT连接/模拟在线/离线）+ 属性/服务控件 + WS实时数据更新
 
+20. **告警冷却**
+    - `alert_rules` 表新增 `cooldown_minutes` 字段（默认 0，不冷却）
+    - MQTT 评估时记录 `last_triggered_at`（内存 sync.Map + DB 持久化）
+    - 冷却期内跳过告警触发，避免频繁告警
+
+21. **修改密码**
+    - 后端 API：`PUT /api/auth/password`（需验证旧密码）
+    - 前端：Dashboard 顶部用户菜单 ChangePassword Dialog
+
+22. **仪表盘今日告警**
+    - 统计概览新增第 4 张卡片：今日告警数
+    - `GET /api/stats/overview` 返回 `today_alerts` 字段（按自然日统计）
+
+23. **CSV 数据导出**
+    - 后端 API：`GET /api/devices/:id/data/export?start=&end=`，返回 CSV 文件流
+    - 前端：DeviceData 历史趋势图表页新增「导出 CSV」按钮
+
+24. **告警确认 + 未读角标**
+    - 后端 API：`PUT /api/alert-logs/:id/acknowledge`，标记告警为已确认
+    - `alert_logs` 表新增 `acknowledged` / `acknowledged_at` / `acknowledged_by` 字段
+    - 前端：告警历史列表新增确认按钮；侧边栏导航「告警历史」显示未读告警数角标
+
+25. **审计日志**
+    - 中间件自动记录 API 操作到 `audit_logs` 表（资源类型 + 操作类型 + 操作结果）
+    - 覆盖 alert_rule / alert_log / auth 等资源类型的 actionMap
+    - 前端：AuditLogList 页面展示审计日志（用户、操作、资源、时间、IP）
+
 ------
 
 ## API 端点
@@ -327,6 +355,7 @@ linkflow/
 | POST   | /api/auth/register          | 用户注册           | 否   |
 | POST   | /api/auth/login             | 用户登录           | 否   |
 | POST   | /api/auth/logout            | 用户登出           | 是   |
+| PUT    | /api/auth/password          | 修改密码           | 是   |
 | GET    | /api/me                     | 获取当前用户       | 是   |
 | POST   | /api/thing-models           | 创建物模型         | 是   |
 | GET    | /api/thing-models           | 物模型列表         | 是   |
@@ -350,6 +379,8 @@ linkflow/
 | DELETE | /api/alert-rules/:id        | 删除告警规则       | 是   |
 | GET    | /api/devices/:id/data/history | 设备历史遥测数据 | 是   |
 | GET    | /api/alert-logs             | 告警历史（?device_id 筛选） | 是   |
+| PUT    | /api/alert-logs/:id/acknowledge | 确认告警           | 是   |
+| GET    | /api/devices/:id/data/export | 设备历史数据 CSV 导出 | 是  |
 | POST   | /api/scheduled-tasks        | 创建定时任务       | 是   |
 | GET    | /api/scheduled-tasks        | 定时任务列表（?device_id 筛选） | 是   |
 | GET    | /api/scheduled-tasks/:id    | 定时任务详情       | 是   |
@@ -410,6 +441,12 @@ docker-compose logs -f web
 - [x] 数据可视化（历史趋势图表，recharts LineChart）
 - [x] 定时任务系统（Cron 调度 + MQTT 下发 + 前端管理）
 - [x] 设备在线调试（模拟上下线 + 属性下发 + 服务调用 + 智能回传）
+- [x] 告警冷却（cooldown_minutes 字段 + last_triggered_at 冷却跳过）
+- [x] 修改密码（PUT /api/auth/password + Dashboard Dialog）
+- [x] 仪表盘今日告警（today_alerts 第 4 张统计卡）
+- [x] CSV 数据导出（历史遥测数据导出按钮）
+- [x] 告警确认 + 未读角标（acknowledge API + 侧边栏角标）
+- [x] 审计日志（操作记录中间件 + 前端查询页面）
 - [ ] 视频接入（RTMP）
 
 ------
@@ -558,10 +595,10 @@ devices/{device_id}/voice/down        # 语音执行结果回传（设备 SUB）
 ### 数据库表
 ```sql
 -- alert_rules: 用户定义的告警规则
-alert_rules (id UUID PK, user_id, name, device_id, model_id, property_id, operator, threshold, severity, enabled, created_at, updated_at)
+alert_rules (id UUID PK, user_id, name, device_id, model_id, property_id, operator, threshold, severity, enabled, cooldown_minutes INT DEFAULT 0, last_triggered_at TIMESTAMPTZ, created_at, updated_at)
 
 -- alert_logs: 触发的告警记录
-alert_logs (id BIGSERIAL PK, rule_id, user_id, device_id, device_name, property_id, property_name, operator, threshold, actual_value, severity, rule_name, created_at)
+alert_logs (id BIGSERIAL PK, rule_id, user_id, device_id, device_name, property_id, property_name, operator, threshold, actual_value, severity, rule_name, acknowledged BOOL DEFAULT FALSE, acknowledged_at TIMESTAMPTZ, acknowledged_by UUID, created_at)
 ```
 
 ### 关键文件

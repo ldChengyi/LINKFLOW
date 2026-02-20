@@ -2,15 +2,20 @@ import { useEffect, useState, useCallback } from 'react';
 import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
-  LayoutDashboard, Box, Cpu, Activity, Blocks, ScrollText, LogOut, Menu, X, ChevronDown, Leaf, User, Bell, AlertTriangle, Clock, Palette, Terminal,
+  LayoutDashboard, Box, Cpu, Activity, Blocks, ScrollText, LogOut, Menu, X, ChevronDown, Leaf, User, Bell, AlertTriangle, Clock, Palette, Terminal, KeyRound,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { authApi, statsApi } from '../api';
+import { authApi, alertLogApi, statsApi } from '../api';
 import type { StatsOverview } from '../api';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle,
+} from '@/components/ui/dialog';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useTheme } from '../hooks/useTheme';
 import type { WSMessage } from '../hooks/useWebSocket';
@@ -40,7 +45,7 @@ const navItems = [
   { key: 'device-data', label: '设备数据', icon: Activity, path: '/device-data' },
   { key: 'device-debug', label: '在线调试', icon: Terminal, path: '/device-debug' },
   { key: 'alert-rules', label: '告警规则', icon: Bell, path: '/alert-rules' },
-  { key: 'alert-logs', label: '告警历史', icon: AlertTriangle, path: '/alert-logs' },
+  { key: 'alert-logs', label: '告警历史', icon: AlertTriangle, path: '/alert-logs', badge: true },
   { key: 'scheduled-tasks', label: '定时任务', icon: Clock, path: '/scheduled-tasks' },
   { key: 'modules', label: '功能模块', icon: Blocks, path: '/modules' },
   { key: 'audit-logs', label: '审计日志', icon: ScrollText, path: '/audit-logs' },
@@ -59,6 +64,7 @@ function WelcomePage({ user, stats }: { user: UserInfo | null; stats: StatsOverv
     { label: '设备总数', value: stats?.total_devices ?? '--', color: 'text-primary' },
     { label: '在线设备', value: stats?.online_devices ?? '--', color: 'text-emerald-400' },
     { label: '物模型', value: stats?.total_thing_models ?? '--', color: 'text-blue-400' },
+    { label: '今日告警', value: stats?.today_alerts ?? '--', color: 'text-yellow-400' },
   ];
 
   return (
@@ -74,7 +80,7 @@ function WelcomePage({ user, stats }: { user: UserInfo | null; stats: StatsOverv
         </p>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-12 w-full max-w-2xl">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-12 w-full max-w-3xl">
         {statItems.map((stat) => (
           <div key={stat.label} className="bg-card border border-border rounded-lg p-6 text-center">
             <p className={cn('text-3xl font-bold', stat.color)}>{stat.value}</p>
@@ -93,10 +99,19 @@ export default function Dashboard() {
   const [collapsed, setCollapsed] = useState(false);
   const [stats, setStats] = useState<StatsOverview | null>(null);
   const { theme, setTheme } = useTheme();
+  const [alertUnreadCount, setAlertUnreadCount] = useState(0);
+
+  // 修改密码 Dialog 状态
+  const [changePwOpen, setChangePwOpen] = useState(false);
+  const [oldPw, setOldPw] = useState('');
+  const [newPw, setNewPw] = useState('');
+  const [confirmPw, setConfirmPw] = useState('');
+  const [changePwLoading, setChangePwLoading] = useState(false);
 
   useEffect(() => {
     fetchUser();
     fetchStats();
+    fetchUnreadCount();
   }, []);
 
   const fetchUser = async () => {
@@ -115,6 +130,18 @@ export default function Dashboard() {
     } catch { /* silent */ }
   };
 
+  const fetchUnreadCount = async () => {
+    try {
+      const { data } = await alertLogApi.unreadCount();
+      setAlertUnreadCount(data.count ?? 0);
+    } catch { /* silent */ }
+  };
+
+  // 子页面确认告警后调用，减少未读数
+  const decrementAlertCount = useCallback((n: number) => {
+    setAlertUnreadCount((prev) => Math.max(0, prev - n));
+  }, []);
+
   // WebSocket 消息处理
   const handleWSMessage = useCallback((msg: WSMessage) => {
     // 统计更新
@@ -122,7 +149,7 @@ export default function Dashboard() {
       setStats((prev) => prev ? { ...prev, online_devices: msg.data.online_devices } : prev);
     }
 
-    // 告警 toast
+    // 告警 toast + 未读数+1
     if (msg.type === 'alert') {
       const d = msg.data;
       const severityMap: Record<string, 'warning' | 'error' | 'info'> = {
@@ -133,6 +160,8 @@ export default function Dashboard() {
         description: `${d.device_name} · ${d.property_name} = ${d.actual_value} ${d.operator} ${d.threshold}`,
         duration: 8000,
       });
+      setAlertUnreadCount((prev) => prev + 1);
+      setStats((prev) => prev ? { ...prev, today_alerts: (prev.today_alerts ?? 0) + 1 } : prev);
     }
 
     // 广播给子页面
@@ -150,6 +179,25 @@ export default function Dashboard() {
     } catch {
       localStorage.removeItem('token');
       window.location.href = '/login';
+    }
+  };
+
+  const handleChangePassword = async () => {
+    if (!oldPw) { toast.error('请输入当前密码'); return; }
+    if (newPw.length < 6) { toast.error('新密码至少6位'); return; }
+    if (newPw !== confirmPw) { toast.error('两次新密码不一致'); return; }
+
+    setChangePwLoading(true);
+    try {
+      await authApi.changePassword({ old_password: oldPw, new_password: newPw });
+      toast.success('密码修改成功');
+      setChangePwOpen(false);
+      setOldPw(''); setNewPw(''); setConfirmPw('');
+    } catch (err: any) {
+      const msg = err?.response?.data?.msg || '修改失败';
+      toast.error(msg);
+    } finally {
+      setChangePwLoading(false);
     }
   };
 
@@ -192,6 +240,7 @@ export default function Dashboard() {
         <nav className="flex-1 py-4 px-2 space-y-1">
           {navItems.map((item) => {
             const isActive = selectedKey === item.key;
+            const showBadge = item.badge && alertUnreadCount > 0;
             return (
               <button
                 key={item.key}
@@ -204,7 +253,16 @@ export default function Dashboard() {
                 )}
               >
                 <item.icon className="h-5 w-5 shrink-0" />
-                {!collapsed && <span>{item.label}</span>}
+                {!collapsed && (
+                  <>
+                    <span className="flex-1 text-left">{item.label}</span>
+                    {showBadge && (
+                      <span className="text-xs bg-destructive text-destructive-foreground rounded-full px-1.5 py-0.5 min-w-[18px] text-center leading-none">
+                        {alertUnreadCount > 99 ? '99+' : alertUnreadCount}
+                      </span>
+                    )}
+                  </>
+                )}
               </button>
             );
           })}
@@ -248,6 +306,10 @@ export default function Dashboard() {
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => setChangePwOpen(true)}>
+                <KeyRound className="h-4 w-4 mr-2" />
+                修改密码
+              </DropdownMenuItem>
               <DropdownMenuItem onClick={handleLogout} className="text-destructive focus:text-destructive">
                 <LogOut className="h-4 w-4 mr-2" />
                 退出登录
@@ -275,13 +337,63 @@ export default function Dashboard() {
             <Route path="/alert-rules" element={<AlertRuleList />} />
             <Route path="/alert-rules/new" element={<AlertRuleForm />} />
             <Route path="/alert-rules/:id/edit" element={<AlertRuleForm />} />
-            <Route path="/alert-logs" element={<AlertLogList />} />
+            <Route path="/alert-logs" element={<AlertLogList onAcknowledge={decrementAlertCount} />} />
             <Route path="/scheduled-tasks" element={<ScheduledTaskList />} />
             <Route path="/scheduled-tasks/new" element={<ScheduledTaskForm />} />
             <Route path="/scheduled-tasks/:id/edit" element={<ScheduledTaskForm />} />
           </Routes>
         </main>
       </div>
+
+      {/* 修改密码 Dialog */}
+      <Dialog open={changePwOpen} onOpenChange={(open) => {
+        setChangePwOpen(open);
+        if (!open) { setOldPw(''); setNewPw(''); setConfirmPw(''); }
+      }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>修改密码</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 pt-2">
+            <div className="space-y-2">
+              <Label>当前密码</Label>
+              <Input
+                type="password"
+                value={oldPw}
+                onChange={(e) => setOldPw(e.target.value)}
+                placeholder="请输入当前密码"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>新密码</Label>
+              <Input
+                type="password"
+                value={newPw}
+                onChange={(e) => setNewPw(e.target.value)}
+                placeholder="至少6位"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>确认新密码</Label>
+              <Input
+                type="password"
+                value={confirmPw}
+                onChange={(e) => setConfirmPw(e.target.value)}
+                placeholder="再次输入新密码"
+                onKeyDown={(e) => e.key === 'Enter' && handleChangePassword()}
+              />
+            </div>
+            <div className="flex gap-3 pt-2">
+              <Button onClick={handleChangePassword} disabled={changePwLoading} className="flex-1">
+                {changePwLoading ? '修改中...' : '确认修改'}
+              </Button>
+              <Button variant="outline" onClick={() => setChangePwOpen(false)} className="flex-1">
+                取消
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -43,6 +43,11 @@ var actionMap = map[string]struct {
 	"POST /api/devices/:id/debug":            {"在线调试", "device"},
 	"POST /api/devices/:id/simulate/online":  {"模拟上线", "device"},
 	"POST /api/devices/:id/simulate/offline": {"模拟下线", "device"},
+	"POST /api/alert-rules":          {"创建告警规则", "alert_rule"},
+	"PUT /api/alert-rules/:id":       {"更新告警规则", "alert_rule"},
+	"DELETE /api/alert-rules/:id":    {"删除告警规则", "alert_rule"},
+	"PUT /api/auth/password":         {"修改密码", "auth"},
+	"PUT /api/alert-logs/:id/acknowledge": {"确认告警", "alert_log"},
 }
 
 // AuditLog 操作审计日志中间件
@@ -168,6 +173,10 @@ func extractResourceID(path, resourceType string) string {
 		prefix = "/api/devices/"
 	case "scheduled_task":
 		prefix = "/api/scheduled-tasks/"
+	case "alert_rule":
+		prefix = "/api/alert-rules/"
+	case "alert_log":
+		prefix = "/api/alert-logs/"
 	default:
 		return ""
 	}

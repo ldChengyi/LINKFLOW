@@ -305,6 +305,13 @@ func (h *EventHook) checkAlertRules(deviceID, userID, deviceName, modelID string
 			continue
 		}
 
+		// 冷却检查：若规则设置了冷却时间且上次触发在冷却期内，跳过
+		if rule.CooldownMinutes > 0 && rule.LastTriggeredAt != nil {
+			if time.Since(*rule.LastTriggeredAt) < time.Duration(rule.CooldownMinutes)*time.Minute {
+				continue
+			}
+		}
+
 		propName := propNameMap[rule.PropertyID]
 		if propName == "" {
 			propName = rule.PropertyID
@@ -329,6 +336,15 @@ func (h *EventHook) checkAlertRules(deviceID, userID, deviceName, modelID string
 			logger.Log.Errorf("checkAlertRules: write alert log failed: %v", err)
 		}
 		cancel()
+
+		// 更新冷却计时（内存缓存 + 异步写 DB）
+		now := time.Now()
+		rule.LastTriggeredAt = &now
+		go func(ruleID string, t time.Time) {
+			ctx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel2()
+			h.broker.alertRuleRepo.UpdateLastTriggeredAt(ctx2, ruleID, t)
+		}(rule.ID, now)
 
 		// WebSocket 推送告警
 		if h.broker.hub != nil {

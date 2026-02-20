@@ -43,6 +43,7 @@ export default function AlertRuleForm() {
   const [threshold, setThreshold] = useState('0');
   const [severity, setSeverity] = useState('warning');
   const [enabled, setEnabled] = useState(true);
+  const [cooldownMinutes, setCooldownMinutes] = useState('0');
 
   useEffect(() => {
     fetchDevices();
@@ -85,6 +86,7 @@ export default function AlertRuleForm() {
       setThreshold(String(rule.threshold));
       setSeverity(rule.severity);
       setEnabled(rule.enabled);
+      setCooldownMinutes(String(rule.cooldown_minutes ?? 0));
     } catch {
       toast.error('获取规则失败');
       navigate('/alert-rules');
@@ -106,6 +108,7 @@ export default function AlertRuleForm() {
         threshold: parseFloat(threshold) || 0,
         severity,
         enabled,
+        cooldown_minutes: parseInt(cooldownMinutes) || 0,
       };
       if (isEdit) {
         await alertRuleApi.update(id!, data);
@@ -208,6 +211,18 @@ export default function AlertRuleForm() {
               ))}
             </SelectContent>
           </Select>
+        </div>
+
+        <div className="space-y-2">
+          <Label>冷却时间（分钟）</Label>
+          <Input
+            type="number"
+            min="0"
+            value={cooldownMinutes}
+            onChange={(e) => setCooldownMinutes(e.target.value)}
+            placeholder="0 = 不限制，每次触发都告警"
+          />
+          <p className="text-xs text-muted-foreground">触发告警后，冷却时间内同一规则不再重复告警</p>
         </div>
 
         <div className="flex items-center gap-3">

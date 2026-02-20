@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -40,16 +41,12 @@ func (r *AlertRuleRepository) exec(ctx context.Context, sql string, args ...any)
 	return err
 }
 
-// Create 创建告警规则
-func (r *AlertRuleRepository) Create(ctx context.Context, userID string, req *model.CreateAlertRuleRequest) (*model.AlertRule, error) {
+func scanRule(row pgx.Row) (*model.AlertRule, error) {
 	var rule model.AlertRule
-	err := r.queryRow(ctx, `
-		INSERT INTO alert_rules (user_id, name, device_id, property_id, operator, threshold, severity, enabled)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		RETURNING id, user_id, name, device_id, '', property_id, operator, threshold, severity, enabled, created_at, updated_at
-	`, userID, req.Name, req.DeviceID, req.PropertyID, req.Operator, req.Threshold, req.Severity, req.Enabled).Scan(
+	err := row.Scan(
 		&rule.ID, &rule.UserID, &rule.Name, &rule.DeviceID, &rule.DeviceName,
 		&rule.PropertyID, &rule.Operator, &rule.Threshold, &rule.Severity, &rule.Enabled,
+		&rule.CooldownMinutes, &rule.LastTriggeredAt,
 		&rule.CreatedAt, &rule.UpdatedAt,
 	)
 	if err != nil {
@@ -58,25 +55,46 @@ func (r *AlertRuleRepository) Create(ctx context.Context, userID string, req *mo
 	return &rule, nil
 }
 
-// GetByID 获取告警规则详情
-func (r *AlertRuleRepository) GetByID(ctx context.Context, id string) (*model.AlertRule, error) {
+func scanRuleFromRows(rows pgx.Rows) (*model.AlertRule, error) {
 	var rule model.AlertRule
-	err := r.queryRow(ctx, `
-		SELECT r.id, r.user_id, r.name, r.device_id, COALESCE(d.name, '') AS device_name,
-		       r.property_id, r.operator, r.threshold, r.severity, r.enabled,
-		       r.created_at, r.updated_at
-		FROM alert_rules r
-		LEFT JOIN devices d ON r.device_id = d.id
-		WHERE r.id = $1
-	`, id).Scan(
+	err := rows.Scan(
 		&rule.ID, &rule.UserID, &rule.Name, &rule.DeviceID, &rule.DeviceName,
 		&rule.PropertyID, &rule.Operator, &rule.Threshold, &rule.Severity, &rule.Enabled,
+		&rule.CooldownMinutes, &rule.LastTriggeredAt,
 		&rule.CreatedAt, &rule.UpdatedAt,
 	)
 	if err != nil {
 		return nil, err
 	}
 	return &rule, nil
+}
+
+// Create 创建告警规则
+func (r *AlertRuleRepository) Create(ctx context.Context, userID string, req *model.CreateAlertRuleRequest) (*model.AlertRule, error) {
+	cooldown := 0
+	if req.CooldownMinutes != nil {
+		cooldown = *req.CooldownMinutes
+	}
+	row := r.queryRow(ctx, `
+		INSERT INTO alert_rules (user_id, name, device_id, property_id, operator, threshold, severity, enabled, cooldown_minutes)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		RETURNING id, user_id, name, device_id, '', property_id, operator, threshold, severity, enabled,
+		          cooldown_minutes, last_triggered_at, created_at, updated_at
+	`, userID, req.Name, req.DeviceID, req.PropertyID, req.Operator, req.Threshold, req.Severity, req.Enabled, cooldown)
+	return scanRule(row)
+}
+
+// GetByID 获取告警规则详情
+func (r *AlertRuleRepository) GetByID(ctx context.Context, id string) (*model.AlertRule, error) {
+	row := r.queryRow(ctx, `
+		SELECT r.id, r.user_id, r.name, r.device_id, COALESCE(d.name, '') AS device_name,
+		       r.property_id, r.operator, r.threshold, r.severity, r.enabled,
+		       r.cooldown_minutes, r.last_triggered_at, r.created_at, r.updated_at
+		FROM alert_rules r
+		LEFT JOIN devices d ON r.device_id = d.id
+		WHERE r.id = $1
+	`, id)
+	return scanRule(row)
 }
 
 // List 获取告警规则列表（可选按设备过滤）
@@ -100,7 +118,7 @@ func (r *AlertRuleRepository) List(ctx context.Context, offset, limit int, devic
 		query = `
 			SELECT r.id, r.user_id, r.name, r.device_id, COALESCE(d.name, '') AS device_name,
 			       r.property_id, r.operator, r.threshold, r.severity, r.enabled,
-			       r.created_at, r.updated_at
+			       r.cooldown_minutes, r.last_triggered_at, r.created_at, r.updated_at
 			FROM alert_rules r
 			LEFT JOIN devices d ON r.device_id = d.id
 			WHERE r.device_id = $3
@@ -111,7 +129,7 @@ func (r *AlertRuleRepository) List(ctx context.Context, offset, limit int, devic
 		query = `
 			SELECT r.id, r.user_id, r.name, r.device_id, COALESCE(d.name, '') AS device_name,
 			       r.property_id, r.operator, r.threshold, r.severity, r.enabled,
-			       r.created_at, r.updated_at
+			       r.cooldown_minutes, r.last_triggered_at, r.created_at, r.updated_at
 			FROM alert_rules r
 			LEFT JOIN devices d ON r.device_id = d.id
 			ORDER BY r.created_at DESC
@@ -127,37 +145,30 @@ func (r *AlertRuleRepository) List(ctx context.Context, offset, limit int, devic
 
 	var rules []*model.AlertRule
 	for rows.Next() {
-		var rule model.AlertRule
-		err := rows.Scan(
-			&rule.ID, &rule.UserID, &rule.Name, &rule.DeviceID, &rule.DeviceName,
-			&rule.PropertyID, &rule.Operator, &rule.Threshold, &rule.Severity, &rule.Enabled,
-			&rule.CreatedAt, &rule.UpdatedAt,
-		)
+		rule, err := scanRuleFromRows(rows)
 		if err != nil {
 			return nil, 0, err
 		}
-		rules = append(rules, &rule)
+		rules = append(rules, rule)
 	}
 	return rules, total, nil
 }
 
 // Update 更新告警规则
 func (r *AlertRuleRepository) Update(ctx context.Context, id string, req *model.UpdateAlertRuleRequest) (*model.AlertRule, error) {
-	var rule model.AlertRule
-	err := r.queryRow(ctx, `
-		UPDATE alert_rules
-		SET name = $2, device_id = $3, property_id = $4, operator = $5, threshold = $6, severity = $7, enabled = $8, updated_at = NOW()
-		WHERE id = $1
-		RETURNING id, user_id, name, device_id, '', property_id, operator, threshold, severity, enabled, created_at, updated_at
-	`, id, req.Name, req.DeviceID, req.PropertyID, req.Operator, req.Threshold, req.Severity, req.Enabled).Scan(
-		&rule.ID, &rule.UserID, &rule.Name, &rule.DeviceID, &rule.DeviceName,
-		&rule.PropertyID, &rule.Operator, &rule.Threshold, &rule.Severity, &rule.Enabled,
-		&rule.CreatedAt, &rule.UpdatedAt,
-	)
-	if err != nil {
-		return nil, err
+	cooldown := 0
+	if req.CooldownMinutes != nil {
+		cooldown = *req.CooldownMinutes
 	}
-	return &rule, nil
+	row := r.queryRow(ctx, `
+		UPDATE alert_rules
+		SET name = $2, device_id = $3, property_id = $4, operator = $5, threshold = $6,
+		    severity = $7, enabled = $8, cooldown_minutes = $9, updated_at = NOW()
+		WHERE id = $1
+		RETURNING id, user_id, name, device_id, '', property_id, operator, threshold, severity, enabled,
+		          cooldown_minutes, last_triggered_at, created_at, updated_at
+	`, id, req.Name, req.DeviceID, req.PropertyID, req.Operator, req.Threshold, req.Severity, req.Enabled, cooldown)
+	return scanRule(row)
 }
 
 // Delete 删除告警规则
@@ -170,7 +181,7 @@ func (r *AlertRuleRepository) ListEnabledByDeviceID(ctx context.Context, deviceI
 	rows, err := r.pool.Query(ctx, `
 		SELECT r.id, r.user_id, r.name, r.device_id, COALESCE(d.name, '') AS device_name,
 		       r.property_id, r.operator, r.threshold, r.severity, r.enabled,
-		       r.created_at, r.updated_at
+		       r.cooldown_minutes, r.last_triggered_at, r.created_at, r.updated_at
 		FROM alert_rules r
 		LEFT JOIN devices d ON r.device_id = d.id
 		WHERE r.device_id = $1 AND r.enabled = true
@@ -182,16 +193,17 @@ func (r *AlertRuleRepository) ListEnabledByDeviceID(ctx context.Context, deviceI
 
 	var rules []*model.AlertRule
 	for rows.Next() {
-		var rule model.AlertRule
-		err := rows.Scan(
-			&rule.ID, &rule.UserID, &rule.Name, &rule.DeviceID, &rule.DeviceName,
-			&rule.PropertyID, &rule.Operator, &rule.Threshold, &rule.Severity, &rule.Enabled,
-			&rule.CreatedAt, &rule.UpdatedAt,
-		)
+		rule, err := scanRuleFromRows(rows)
 		if err != nil {
 			return nil, err
 		}
-		rules = append(rules, &rule)
+		rules = append(rules, rule)
 	}
 	return rules, nil
+}
+
+// UpdateLastTriggeredAt 更新规则最后触发时间（绕过 RLS）
+func (r *AlertRuleRepository) UpdateLastTriggeredAt(ctx context.Context, ruleID string, t time.Time) error {
+	_, err := r.pool.Exec(ctx, `UPDATE alert_rules SET last_triggered_at = $2 WHERE id = $1`, ruleID, t)
+	return err
 }

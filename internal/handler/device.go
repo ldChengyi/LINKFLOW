@@ -1,8 +1,12 @@
 package handler
 
 import (
+	"bytes"
 	"context"
+	"encoding/csv"
+	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"time"
 
@@ -219,6 +223,85 @@ func (h *DeviceHandler) History(c *gin.Context) {
 		return
 	}
 	Success(c, data)
+}
+
+// ExportCSV 导出设备历史数据为 CSV
+func (h *DeviceHandler) ExportCSV(c *gin.Context) {
+	ctx, err := h.withRLS(c)
+	if err != nil {
+		Fail(c, http.StatusInternalServerError, "database error")
+		return
+	}
+	defer database.ReleaseRLSConn(ctx)
+
+	id := c.Param("id")
+	if _, err = h.repo.GetByID(ctx, id); err != nil {
+		Fail(c, http.StatusNotFound, "device not found")
+		return
+	}
+
+	end := time.Now()
+	start := end.Add(-1 * time.Hour)
+	if s := c.Query("start"); s != "" {
+		if t, err2 := time.Parse(time.RFC3339, s); err2 == nil {
+			start = t
+		}
+	}
+	if e := c.Query("end"); e != "" {
+		if t, err2 := time.Parse(time.RFC3339, e); err2 == nil {
+			end = t
+		}
+	}
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "1000"))
+	if limit < 1 || limit > 5000 {
+		limit = 1000
+	}
+
+	data, err := h.dataRepo.GetDataHistory(ctx, id, start, end, limit)
+	if err != nil {
+		logger.Log.Errorf("ExportCSV: failed to get history data for device %s: %v", id, err)
+		Fail(c, http.StatusInternalServerError, "failed to get history data")
+		return
+	}
+
+	// 收集所有 payload key
+	keySet := make(map[string]struct{})
+	for _, d := range data {
+		for k := range d.Payload {
+			keySet[k] = struct{}{}
+		}
+	}
+	keys := make([]string, 0, len(keySet))
+	for k := range keySet {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	// 写 CSV
+	var buf bytes.Buffer
+	w := csv.NewWriter(&buf)
+
+	header := append([]string{"time", "valid"}, keys...)
+	w.Write(header)
+
+	for _, d := range data {
+		row := make([]string, 0, len(header))
+		row = append(row, d.Time.UTC().Format(time.RFC3339), fmt.Sprintf("%v", d.Valid))
+		for _, k := range keys {
+			if v, ok := d.Payload[k]; ok {
+				row = append(row, fmt.Sprintf("%v", v))
+			} else {
+				row = append(row, "")
+			}
+		}
+		w.Write(row)
+	}
+	w.Flush()
+
+	filename := fmt.Sprintf("device_%s_%s.csv", id[:8], start.UTC().Format("20060102"))
+	c.Header("Content-Type", "text/csv; charset=utf-8")
+	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	c.Data(http.StatusOK, "text/csv; charset=utf-8", buf.Bytes())
 }
 
 // LatestData 获取设备最新遥测数据

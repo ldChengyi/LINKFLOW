@@ -101,7 +101,7 @@ func main() {
 	authHandler := handler.NewAuthHandler(authService)
 	thingModelHandler := handler.NewThingModelHandler(thingModelRepo, db.App())
 	deviceHandler := handler.NewDeviceHandler(deviceRepo, deviceDataRepoApp, db.App(), rdb)
-	statsHandler := handler.NewStatsHandler(deviceRepo, thingModelRepo, db.App(), rdb)
+	statsHandler := handler.NewStatsHandler(deviceRepo, thingModelRepo, alertLogRepoApp, db.App(), rdb)
 	moduleHandler := handler.NewModuleHandler(moduleRepo)
 	auditLogHandler := handler.NewAuditLogHandler(auditLogRepo)
 	wsHandler := handler.NewWSHandler(hub, jwtService)
@@ -137,6 +137,7 @@ func main() {
 		protected.Use(middleware.Auth(jwtService))
 		{
 			protected.POST("/auth/logout", authHandler.Logout)
+			protected.PUT("/auth/password", authHandler.ChangePassword)
 			protected.GET("/me", func(c *gin.Context) {
 				c.JSON(http.StatusOK, handler.Response{Code: 200, Msg: "success", Data: gin.H{
 					"user_id": middleware.GetUserID(c),
@@ -162,6 +163,7 @@ func main() {
 				devices.GET("/:id", deviceHandler.Get)
 				devices.GET("/:id/data/latest", deviceHandler.LatestData)
 				devices.GET("/:id/data/history", deviceHandler.History)
+				devices.GET("/:id/data/export", deviceHandler.ExportCSV)
 				devices.PUT("/:id", deviceHandler.Update)
 				devices.DELETE("/:id", deviceHandler.Delete)
 				devices.POST("/:id/debug", debugHandler.Debug)
@@ -191,8 +193,10 @@ func main() {
 				alertRules.DELETE("/:id", alertRuleHandler.Delete)
 			}
 
-			// 告警日志路由
+			// 告警日志路由（注意 unread-count 必须在 /:id 之前注册）
+			protected.GET("/alert-logs/unread-count", alertLogHandler.UnreadCount)
 			protected.GET("/alert-logs", alertLogHandler.List)
+			protected.PUT("/alert-logs/:id/acknowledge", alertLogHandler.Acknowledge)
 
 			// 定时任务路由
 			scheduledTasks := protected.Group("/scheduled-tasks")

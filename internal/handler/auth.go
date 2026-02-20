@@ -75,6 +75,33 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	Success(c, AuthResponse{Token: token, User: user})
 }
 
+type ChangePasswordRequest struct {
+	OldPassword string `json:"old_password" binding:"required"`
+	NewPassword string `json:"new_password" binding:"required,min=6"`
+}
+
+// ChangePassword 修改密码
+func (h *AuthHandler) ChangePassword(c *gin.Context) {
+	var req ChangePasswordRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		Fail(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	userID := middleware.GetUserID(c)
+	if err := h.authService.ChangePassword(c.Request.Context(), userID, req.OldPassword, req.NewPassword); err != nil {
+		switch err {
+		case service.ErrInvalidCredentials:
+			Fail(c, http.StatusUnauthorized, "当前密码错误")
+		default:
+			Fail(c, http.StatusInternalServerError, "修改密码失败")
+		}
+		return
+	}
+
+	Success(c, nil)
+}
+
 // Logout 用户登出
 func (h *AuthHandler) Logout(c *gin.Context) {
 	userID := middleware.GetUserID(c)

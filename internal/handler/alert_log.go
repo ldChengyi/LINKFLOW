@@ -54,3 +54,43 @@ func (h *AlertLogHandler) List(c *gin.Context) {
 	}
 	Page(c, logs, total, page, pageSize)
 }
+
+// UnreadCount 获取未确认告警数
+func (h *AlertLogHandler) UnreadCount(c *gin.Context) {
+	ctx, err := h.withRLS(c)
+	if err != nil {
+		Fail(c, http.StatusInternalServerError, "database error")
+		return
+	}
+	defer database.ReleaseRLSConn(ctx)
+
+	count, err := h.repo.CountUnacknowledged(ctx)
+	if err != nil {
+		Fail(c, http.StatusInternalServerError, "failed to count unread alerts")
+		return
+	}
+	Success(c, gin.H{"count": count})
+}
+
+// Acknowledge 确认告警
+func (h *AlertLogHandler) Acknowledge(c *gin.Context) {
+	ctx, err := h.withRLS(c)
+	if err != nil {
+		Fail(c, http.StatusInternalServerError, "database error")
+		return
+	}
+	defer database.ReleaseRLSConn(ctx)
+
+	idStr := c.Param("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		Fail(c, http.StatusBadRequest, "invalid id")
+		return
+	}
+
+	if err := h.repo.Acknowledge(ctx, id); err != nil {
+		Fail(c, http.StatusInternalServerError, "failed to acknowledge alert")
+		return
+	}
+	Success(c, nil)
+}

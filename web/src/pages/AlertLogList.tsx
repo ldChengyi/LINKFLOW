@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
-import { AlertTriangle } from 'lucide-react';
+import { AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { alertLogApi, deviceApi } from '../api';
 import type { AlertLog, Device } from '../api';
 import { Button } from '@/components/ui/button';
@@ -26,7 +26,11 @@ const severityLabels: Record<string, string> = {
   info: '信息',
 };
 
-export default function AlertLogList() {
+interface AlertLogListProps {
+  onAcknowledge?: (count: number) => void;
+}
+
+export default function AlertLogList({ onAcknowledge }: AlertLogListProps = {}) {
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<AlertLog[]>([]);
   const [total, setTotal] = useState(0);
@@ -34,6 +38,7 @@ export default function AlertLogList() {
   const [pageSize] = useState(20);
   const [devices, setDevices] = useState<Device[]>([]);
   const [filterDeviceId, setFilterDeviceId] = useState('');
+  const [acknowledging, setAcknowledging] = useState<number | null>(null);
 
   useEffect(() => {
     deviceApi.list(1, 100).then((res) => setDevices(res.data.list || [])).catch(() => {});
@@ -66,12 +71,26 @@ export default function AlertLogList() {
       if (msg.type === 'alert') {
         const log = msg.data as AlertLog;
         if (!filterDeviceId || log.device_id === filterDeviceId) {
-          setData((prev) => [log, ...prev].slice(0, pageSize));
+          setData((prev) => [{ ...log, acknowledged: false }, ...prev].slice(0, pageSize));
           setTotal((prev) => prev + 1);
         }
       }
     });
   }, [pageSize, filterDeviceId]);
+
+  const handleAcknowledge = async (id: number) => {
+    setAcknowledging(id);
+    try {
+      await alertLogApi.acknowledge(id);
+      setData((prev) => prev.map((item) => item.id === id ? { ...item, acknowledged: true, acknowledged_at: new Date().toISOString() } : item));
+      onAcknowledge?.(1);
+      toast.success('已确认告警');
+    } catch {
+      toast.error('确认失败');
+    } finally {
+      setAcknowledging(null);
+    }
+  };
 
   const totalPages = Math.ceil(total / pageSize);
 
@@ -118,11 +137,12 @@ export default function AlertLogList() {
                   <TableHead>条件</TableHead>
                   <TableHead>实际值</TableHead>
                   <TableHead>级别</TableHead>
+                  <TableHead>状态</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {data.map((item) => (
-                  <TableRow key={item.id}>
+                  <TableRow key={item.id} className={item.acknowledged ? 'opacity-50' : ''}>
                     <TableCell className="text-muted-foreground text-sm whitespace-nowrap">
                       {new Date(item.created_at).toLocaleString()}
                     </TableCell>
@@ -135,6 +155,24 @@ export default function AlertLogList() {
                       <Badge variant={severityColors[item.severity] as any || 'secondary'}>
                         {severityLabels[item.severity] || item.severity}
                       </Badge>
+                    </TableCell>
+                    <TableCell>
+                      {item.acknowledged ? (
+                        <div className="flex items-center gap-1 text-muted-foreground text-xs">
+                          <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
+                          已确认
+                        </div>
+                      ) : (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 text-xs px-2"
+                          disabled={acknowledging === item.id}
+                          onClick={() => handleAcknowledge(item.id)}
+                        >
+                          {acknowledging === item.id ? '确认中...' : '确认'}
+                        </Button>
+                      )}
                     </TableCell>
                   </TableRow>
                 ))}

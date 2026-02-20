@@ -15,6 +15,7 @@ import (
 type StatsHandler struct {
 	deviceRepo     *repository.DeviceRepository
 	thingModelRepo *repository.ThingModelRepository
+	alertLogRepo   *repository.AlertLogRepository
 	pool           *pgxpool.Pool
 	rdb            *cache.Redis
 }
@@ -22,21 +23,24 @@ type StatsHandler struct {
 func NewStatsHandler(
 	deviceRepo *repository.DeviceRepository,
 	thingModelRepo *repository.ThingModelRepository,
+	alertLogRepo *repository.AlertLogRepository,
 	pool *pgxpool.Pool,
 	rdb *cache.Redis,
 ) *StatsHandler {
 	return &StatsHandler{
 		deviceRepo:     deviceRepo,
 		thingModelRepo: thingModelRepo,
+		alertLogRepo:   alertLogRepo,
 		pool:           pool,
 		rdb:            rdb,
 	}
 }
 
 type StatsOverview struct {
-	TotalDevices    int   `json:"total_devices"`
-	OnlineDevices   int64 `json:"online_devices"`
-	TotalThingModels int  `json:"total_thing_models"`
+	TotalDevices     int   `json:"total_devices"`
+	OnlineDevices    int64 `json:"online_devices"`
+	TotalThingModels int   `json:"total_thing_models"`
+	TodayAlerts      int   `json:"today_alerts"`
 }
 
 // Overview 仪表盘统计概览
@@ -75,9 +79,16 @@ func (h *StatsHandler) Overview(c *gin.Context) {
 		onlineDevices = 0
 	}
 
+	todayAlerts, err := h.alertLogRepo.CountToday(ctx)
+	if err != nil {
+		logger.Log.Errorf("Failed to count today alerts: %v", err)
+		todayAlerts = 0
+	}
+
 	Success(c, StatsOverview{
 		TotalDevices:     totalDevices,
 		OnlineDevices:    onlineDevices,
 		TotalThingModels: totalThingModels,
+		TodayAlerts:      todayAlerts,
 	})
 }

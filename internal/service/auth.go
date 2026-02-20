@@ -81,3 +81,19 @@ func (s *AuthService) Login(ctx context.Context, email, password string) (*model
 func (s *AuthService) Logout(ctx context.Context, userID, token string) error {
 	return s.jwtService.Revoke(ctx, userID, token)
 }
+
+// ChangePassword 修改密码
+func (s *AuthService) ChangePassword(ctx context.Context, userID, oldPassword, newPassword string) error {
+	user, err := s.userRepo.GetByID(ctx, userID)
+	if err != nil {
+		return ErrInvalidCredentials
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(oldPassword)); err != nil {
+		return ErrInvalidCredentials
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+	return s.userRepo.UpdatePassword(ctx, userID, string(hash))
+}
