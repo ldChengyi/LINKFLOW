@@ -5,6 +5,7 @@ import { Clock, Plus, Pencil, Trash2, Power } from 'lucide-react';
 import { scheduledTaskApi, deviceApi } from '../api';
 import type { ScheduledTask, Device } from '../api';
 import { Card, CardContent } from '@/components/ui/card';
+import { DataPagination } from '@/components/ui/data-pagination';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
@@ -21,12 +22,13 @@ export default function ScheduledTaskList() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
   const [loading, setLoading] = useState(true);
   const [filterDevice, setFilterDevice] = useState('all');
   const [deleteId, setDeleteId] = useState<string | null>(null);
 
   useEffect(() => { fetchDevices(); }, []);
-  useEffect(() => { fetchTasks(); }, [page, filterDevice]);
+  useEffect(() => { fetchTasks(); }, [page, pageSize, filterDevice]);
 
   const fetchDevices = async () => {
     try {
@@ -39,7 +41,7 @@ export default function ScheduledTaskList() {
     setLoading(true);
     try {
       const deviceId = filterDevice === 'all' ? undefined : filterDevice;
-      const res = await scheduledTaskApi.list(page, 10, deviceId);
+      const res = await scheduledTaskApi.list(page, pageSize, deviceId);
       setTasks(res.data.list || []);
       setTotal(res.data.total);
     } catch {
@@ -71,7 +73,6 @@ export default function ScheduledTaskList() {
     } catch { toast.error('删除失败'); }
   };
 
-  const totalPages = Math.ceil(total / 10);
 
   return (
     <>
@@ -158,13 +159,11 @@ export default function ScheduledTaskList() {
           </div>
         )}
 
-        {totalPages > 1 && (
-          <div className="flex justify-center gap-2">
-            <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage(p => p - 1)}>上一页</Button>
-            <span className="text-sm text-muted-foreground py-2">{page} / {totalPages}</span>
-            <Button variant="outline" size="sm" disabled={page >= totalPages} onClick={() => setPage(p => p + 1)}>下一页</Button>
-          </div>
-        )}
+        <DataPagination
+          page={page} pageSize={pageSize} total={total}
+          onPageChange={setPage}
+          onPageSizeChange={(s) => setPageSize(s)}
+        />
       </div>
 
       <Dialog open={!!deleteId} onOpenChange={(open: boolean) => !open && setDeleteId(null)}>

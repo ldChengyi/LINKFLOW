@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
-  LayoutDashboard, Box, Cpu, Activity, Blocks, ScrollText, LogOut, Menu, X, ChevronDown, ChevronRight, Leaf, User, Bell, AlertTriangle, Clock, Palette, Terminal, KeyRound, Upload, Radio, Shield,
+  LayoutDashboard, Box, Cpu, Activity, Blocks, ScrollText, LogOut, Menu, X, ChevronDown, ChevronRight, Leaf, User, Bell, AlertTriangle, Clock, Palette, Terminal, KeyRound, Upload, Radio, Shield, ClipboardList,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { authApi, alertLogApi, statsApi } from '../api';
@@ -34,6 +34,7 @@ import ScheduledTaskForm from './ScheduledTaskForm';
 import DeviceDebug from './DeviceDebug';
 import FirmwareList from './FirmwareList';
 import OTATaskList from './OTATaskList';
+import ScheduledTaskLogList from './ScheduledTaskLogList';
 
 interface UserInfo {
   user_id: string;
@@ -62,6 +63,7 @@ const navGroups: (NavItem | NavGroup)[] = [
       { key: 'alert-rules', label: '告警规则', icon: Bell, path: '/alert-rules' },
       { key: 'alert-logs', label: '告警历史', icon: AlertTriangle, path: '/alert-logs', badge: true },
       { key: 'scheduled-tasks', label: '定时任务', icon: Clock, path: '/scheduled-tasks' },
+      { key: 'scheduled-task-logs', label: '执行历史', icon: ClipboardList, path: '/scheduled-task-logs' },
     ],
   },
   {
@@ -241,6 +243,7 @@ export default function Dashboard() {
     if (path.startsWith('/audit-logs')) return 'audit-logs';
     if (path.startsWith('/alert-rules')) return 'alert-rules';
     if (path.startsWith('/alert-logs')) return 'alert-logs';
+    if (path.startsWith('/scheduled-task-logs')) return 'scheduled-task-logs';
     if (path.startsWith('/scheduled-tasks')) return 'scheduled-tasks';
     if (path.startsWith('/firmwares')) return 'firmwares';
     if (path.startsWith('/ota-tasks')) return 'ota-tasks';
@@ -398,6 +401,7 @@ export default function Dashboard() {
             <Route path="/scheduled-tasks" element={<ScheduledTaskList />} />
             <Route path="/scheduled-tasks/new" element={<ScheduledTaskForm />} />
             <Route path="/scheduled-tasks/:id/edit" element={<ScheduledTaskForm />} />
+            <Route path="/scheduled-task-logs" element={<ScheduledTaskLogList />} />
             <Route path="/firmwares" element={<FirmwareList />} />
             <Route path="/ota-tasks" element={<OTATaskList />} />
           </Routes>

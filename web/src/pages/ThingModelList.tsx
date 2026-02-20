@@ -5,6 +5,7 @@ import { Plus, Pencil, Trash2, Mic } from 'lucide-react';
 import { thingModelApi } from '../api';
 import type { ThingModel } from '../api';
 import { Button } from '@/components/ui/button';
+import { DataPagination } from '@/components/ui/data-pagination';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -20,7 +21,7 @@ export default function ThingModelList() {
   const [data, setData] = useState<ThingModel[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
-  const [pageSize] = useState(10);
+  const [pageSize, setPageSize] = useState(10);
   const [deleteTarget, setDeleteTarget] = useState<ThingModel | null>(null);
 
   const fetchData = async () => {
@@ -52,7 +53,6 @@ export default function ThingModelList() {
     }
   };
 
-  const totalPages = Math.ceil(total / pageSize);
 
   return (
     <>
@@ -134,21 +134,11 @@ export default function ThingModelList() {
                 </TableBody>
               </Table>
 
-              {/* Pagination */}
-              {totalPages > 1 && (
-                <div className="flex items-center justify-between mt-4 pt-4 border-t border-border">
-                  <span className="text-sm text-muted-foreground">共 {total} 条</span>
-                  <div className="flex items-center gap-2">
-                    <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage(page - 1)}>
-                      上一页
-                    </Button>
-                    <span className="text-sm text-muted-foreground px-2">{page} / {totalPages}</span>
-                    <Button variant="outline" size="sm" disabled={page >= totalPages} onClick={() => setPage(page + 1)}>
-                      下一页
-                    </Button>
-                  </div>
-                </div>
-              )}
+              <DataPagination
+                page={page} pageSize={pageSize} total={total}
+                onPageChange={setPage}
+                onPageSizeChange={(s) => setPageSize(s)}
+              />
             </>
           )}
         </CardContent>

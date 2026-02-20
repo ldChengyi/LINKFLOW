@@ -401,4 +401,27 @@ export const otaTaskApi = {
   cancel: (id: string) => api.put(`/ota-tasks/${id}/cancel`),
 };
 
+// 定时任务执行日志相关类型
+export interface ScheduledTaskLog {
+  id: number;
+  task_id: string;
+  user_id: string;
+  device_id: string;
+  device_name: string;
+  task_name: string;
+  action_type: 'property_set' | 'service_invoke';
+  topic: string;
+  payload: unknown;
+  status: 'success' | 'failed';
+  error: string;
+  created_at: string;
+}
+
+export const scheduledTaskLogApi = {
+  list: (page = 1, pageSize = 20, taskId?: string, deviceId?: string) =>
+    api.get<ListResponse<ScheduledTaskLog>>('/scheduled-task-logs', {
+      params: { page, page_size: pageSize, ...(taskId ? { task_id: taskId } : {}), ...(deviceId ? { device_id: deviceId } : {}) },
+    }),
+};
+
 export default api;

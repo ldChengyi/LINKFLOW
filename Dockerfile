@@ -3,15 +3,12 @@ FROM golang:1.24-alpine AS builder
 
 WORKDIR /app
 
-# Go proxy for China
-ENV GOPROXY=https://goproxy.cn,direct
+# Use vendor mode - no network download needed inside container
+ENV GOFLAGS=-mod=vendor
 
-# Install dependencies
-RUN apk add --no-cache git
-
-# Copy go mod files
+# Copy go mod files and vendor directory
 COPY go.mod go.sum ./
-RUN go mod download
+COPY vendor/ ./vendor/
 
 # Copy source code
 COPY . .

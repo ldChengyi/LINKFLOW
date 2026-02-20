@@ -4,6 +4,7 @@ import { Upload, Trash2, Package } from 'lucide-react';
 import { firmwareApi } from '../api';
 import type { Firmware } from '../api';
 import { Button } from '@/components/ui/button';
+import { DataPagination } from '@/components/ui/data-pagination';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -32,7 +33,7 @@ export default function FirmwareList() {
   const [version, setVersion] = useState('');
   const [description, setDescription] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
-  const pageSize = 10;
+  const [pageSize, setPageSize] = useState(10);
 
   const fetchData = async () => {
     setLoading(true);
@@ -47,7 +48,7 @@ export default function FirmwareList() {
     }
   };
 
-  useEffect(() => { fetchData(); }, [page]);
+  useEffect(() => { fetchData(); }, [page, pageSize]);
 
   const handleUpload = async () => {
     const file = fileRef.current?.files?.[0];
@@ -87,7 +88,6 @@ export default function FirmwareList() {
     }
   };
 
-  const totalPages = Math.ceil(total / pageSize);
 
   return (
     <>
@@ -147,16 +147,11 @@ export default function FirmwareList() {
                 </TableBody>
               </Table>
 
-              {totalPages > 1 && (
-                <div className="flex items-center justify-between mt-4 pt-4 border-t border-border">
-                  <span className="text-sm text-muted-foreground">共 {total} 条</span>
-                  <div className="flex items-center gap-2">
-                    <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage(page - 1)}>上一页</Button>
-                    <span className="text-sm text-muted-foreground px-2">{page} / {totalPages}</span>
-                    <Button variant="outline" size="sm" disabled={page >= totalPages} onClick={() => setPage(page + 1)}>下一页</Button>
-                  </div>
-                </div>
-              )}
+              <DataPagination
+                page={page} pageSize={pageSize} total={total}
+                onPageChange={setPage}
+                onPageSizeChange={(s) => setPageSize(s)}
+              />
             </>
           )}
         </CardContent>

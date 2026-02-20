@@ -78,6 +78,8 @@ func main() {
 	alertLogRepoApp := repository.NewAlertLogRepository(db.App())
 	scheduledTaskRepoApp := repository.NewScheduledTaskRepository(db.App())
 	scheduledTaskRepoAdmin := repository.NewScheduledTaskRepository(db.Admin())
+	stlRepoAdmin := repository.NewScheduledTaskLogRepository(db.Admin())
+	stlRepoApp := repository.NewScheduledTaskLogRepository(db.App())
 
 	// MQTT 专用 Repository（使用 Admin pool 绕过 RLS）
 	mqttDeviceRepo := repository.NewDeviceRepository(db.Admin())
@@ -101,7 +103,7 @@ func main() {
 	logger.Log.Info("MQTT broker started")
 
 	// 初始化 Scheduler
-	sched := scheduler.New(scheduledTaskRepoAdmin, broker)
+	sched := scheduler.New(scheduledTaskRepoAdmin, broker, stlRepoAdmin)
 	sched.Start()
 
 	// 初始化 Handler
@@ -115,6 +117,7 @@ func main() {
 	alertRuleHandler := handler.NewAlertRuleHandler(alertRuleRepoApp, db.App(), broker)
 	alertLogHandler := handler.NewAlertLogHandler(alertLogRepoApp, db.App())
 	scheduledTaskHandler := handler.NewScheduledTaskHandler(scheduledTaskRepoApp, db.App())
+	stlHandler := handler.NewScheduledTaskLogHandler(stlRepoApp, db.App())
 	debugHandler := handler.NewDebugHandler(deviceRepo, thingModelRepo, deviceDataRepo, db.App(), rdb, broker)
 	firmwareHandler := handler.NewFirmwareHandler(firmwareRepoApp, mqttDeviceRepo, db.App())
 	otaTaskHandler := handler.NewOTATaskHandler(otaTaskRepoApp, firmwareRepoApp, deviceRepo, db.App(), broker, baseURL)
@@ -219,6 +222,9 @@ func main() {
 				scheduledTasks.PUT("/:id", scheduledTaskHandler.Update)
 				scheduledTasks.DELETE("/:id", scheduledTaskHandler.Delete)
 			}
+
+			// 定时任务执行日志路由
+			protected.GET("/scheduled-task-logs", stlHandler.List)
 
 			// 审计日志路由（admin 查所有，普通用户查自己的）
 			protected.GET("/audit-logs", auditLogHandler.List)

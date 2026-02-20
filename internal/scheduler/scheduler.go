@@ -18,18 +18,24 @@ type Publisher interface {
 	Publish(topic string, payload []byte, retain bool, qos byte) error
 }
 
+type TaskLogWriter interface {
+	Create(ctx context.Context, log *model.ScheduledTaskLog) error
+}
+
 type Scheduler struct {
 	taskRepo  *repository.ScheduledTaskRepository
 	publisher Publisher
+	logRepo   TaskLogWriter
 	parser    cron.Parser
 	stop      chan struct{}
 	wg        sync.WaitGroup
 }
 
-func New(taskRepo *repository.ScheduledTaskRepository, publisher Publisher) *Scheduler {
+func New(taskRepo *repository.ScheduledTaskRepository, publisher Publisher, logRepo TaskLogWriter) *Scheduler {
 	return &Scheduler{
 		taskRepo:  taskRepo,
 		publisher: publisher,
+		logRepo:   logRepo,
 		parser:    cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow),
 		stop:      make(chan struct{}),
 	}
@@ -109,8 +115,32 @@ func (s *Scheduler) executeTask(ctx context.Context, task *model.ScheduledTask) 
 		return
 	}
 
-	if err := s.publisher.Publish(topic, payload, false, 1); err != nil {
-		logger.Log.Errorf("Scheduler: publish failed for task %s: %v", task.ID, err)
+	publishErr := s.publisher.Publish(topic, payload, false, 1)
+
+	// 写执行日志
+	if s.logRepo != nil {
+		entry := &model.ScheduledTaskLog{
+			TaskID:     task.ID,
+			UserID:     task.UserID,
+			DeviceID:   task.DeviceID,
+			DeviceName: task.DeviceName,
+			TaskName:   task.Name,
+			ActionType: task.ActionType,
+			Topic:      topic,
+			Payload:    json.RawMessage(payload),
+			Status:     "success",
+		}
+		if publishErr != nil {
+			entry.Status = "failed"
+			entry.Error = publishErr.Error()
+		}
+		if err := s.logRepo.Create(ctx, entry); err != nil {
+			logger.Log.Errorf("Scheduler: write task log failed: %v", err)
+		}
+	}
+
+	if publishErr != nil {
+		logger.Log.Errorf("Scheduler: publish failed for task %s: %v", task.ID, publishErr)
 		return
 	}
 

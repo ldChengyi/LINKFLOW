@@ -5,6 +5,7 @@ import { otaTaskApi, firmwareApi, deviceApi } from '../api';
 import type { OTATask, Firmware, Device } from '../api';
 import { onWSMessage } from './Dashboard';
 import { Button } from '@/components/ui/button';
+import { DataPagination } from '@/components/ui/data-pagination';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
@@ -39,7 +40,7 @@ export default function OTATaskList() {
   const [selFirmware, setSelFirmware] = useState('');
   const [creating, setCreating] = useState(false);
   const [cancelTarget, setCancelTarget] = useState<OTATask | null>(null);
-  const pageSize = 10;
+  const [pageSize, setPageSize] = useState(10);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -49,7 +50,7 @@ export default function OTATaskList() {
       setTotal(res.data.total);
     } catch { toast.error('获取OTA任务失败'); }
     finally { setLoading(false); }
-  }, [page, filterDevice]);
+  }, [page, pageSize, filterDevice]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -93,7 +94,6 @@ export default function OTATaskList() {
     } catch { toast.error('取消失败'); }
   };
 
-  const totalPages = Math.ceil(total / pageSize);
   const canCancel = (s: string) => s === 'pending' || s === 'pushing';
 
   return (
@@ -176,16 +176,11 @@ export default function OTATaskList() {
                 </TableBody>
               </Table>
 
-              {totalPages > 1 && (
-                <div className="flex items-center justify-between mt-4 pt-4 border-t border-border">
-                  <span className="text-sm text-muted-foreground">共 {total} 条</span>
-                  <div className="flex items-center gap-2">
-                    <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage(page - 1)}>上一页</Button>
-                    <span className="text-sm text-muted-foreground px-2">{page} / {totalPages}</span>
-                    <Button variant="outline" size="sm" disabled={page >= totalPages} onClick={() => setPage(page + 1)}>下一页</Button>
-                  </div>
-                </div>
-              )}
+              <DataPagination
+                page={page} pageSize={pageSize} total={total}
+                onPageChange={setPage}
+                onPageSizeChange={(s) => setPageSize(s)}
+              />
             </>
           )}
         </CardContent>

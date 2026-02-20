@@ -5,6 +5,21 @@ import (
 	"time"
 )
 
+type ScheduledTaskLog struct {
+	ID         int64           `json:"id"`
+	TaskID     string          `json:"task_id"`
+	UserID     string          `json:"user_id"`
+	DeviceID   string          `json:"device_id"`
+	DeviceName string          `json:"device_name"`
+	TaskName   string          `json:"task_name"`
+	ActionType string          `json:"action_type"`
+	Topic      string          `json:"topic"`
+	Payload    json.RawMessage `json:"payload"`
+	Status     string          `json:"status"` // "success" | "failed"
+	Error      string          `json:"error"`
+	CreatedAt  time.Time       `json:"created_at"`
+}
+
 type ScheduledTask struct {
 	ID         string          `json:"id"`
 	UserID     string          `json:"user_id"`
