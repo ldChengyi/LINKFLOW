@@ -448,6 +448,11 @@ docker-compose logs -f web
 - [x] 告警确认 + 未读角标（acknowledge API + 侧边栏角标）
 - [x] 审计日志（操作记录中间件 + 前端查询页面）
 - [ ] 视频接入（RTMP）
+- [ ] OTA 固件升级（固件仓库 + 标准化 MQTT 协议 + 多设备类型支持 + 灰度发布策略）
+- [ ] 设备影子（Device Shadow，desired/reported 双状态 + 离线同步 delta）
+- [ ] 数据聚合查询（TimescaleDB time_bucket，支持 avg/max/min + 长时间范围图表）
+- [ ] 多渠道告警通知（SMTP 邮件 + 钉钉/企业微信 Webhook）
+- [ ] Webhook 数据转发（规则引擎轻量版，遥测数据 POST 转发到第三方）
 
 ------
 
