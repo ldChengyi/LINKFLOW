@@ -402,8 +402,8 @@ func (n *ExecuteNode) execPropertySet(ctx context.Context, pc *PipelineContext) 
 		return &model.VoiceResult{Success: false, Message: "指令下发失败"}
 	}
 
-	// 同步写入 device_data
-	if pc.UserID != "" {
+	// 仅模拟设备才直接写入 device_data；真实 MQTT 连接的设备会自行通过 telemetry/up 回传
+	if pc.UserID != "" && !n.broker.IsClientConnected(deviceID) {
 		merged := map[string]any{propID: value}
 		if existing, err := n.broker.deviceDataRepo.GetLatestData(ctx, deviceID); err == nil && existing != nil {
 			for k, v := range existing.Payload {

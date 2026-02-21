@@ -16,6 +16,13 @@ import (
 	"github.com/ldchengyi/linkflow/internal/ws"
 )
 
+// VoiceSettings 语音控制配置快照
+type VoiceSettings struct {
+	Mode   string
+	APIURL string
+	APIKey string
+}
+
 // DeviceInfo 缓存已连接设备的信息
 type DeviceInfo struct {
 	UserID     string
@@ -35,6 +42,7 @@ type Broker struct {
 	alertLogRepo   *repository.AlertLogRepository
 	otaTaskRepo    *repository.OTATaskRepository
 	firmwareRepo   *repository.FirmwareRepository
+	settingsRepo   *repository.SettingsRepository
 	rdb            *cache.Redis
 	hub            *ws.Hub
 	baseURL        string
@@ -45,6 +53,13 @@ type Broker struct {
 	models sync.Map
 	// 告警规则缓存: device_id → []model.AlertRule
 	alertRules sync.Map
+
+	// 语音设置缓存（30s TTL）
+	settingsMu     sync.RWMutex
+	voiceMode      string
+	difyAPIURL     string
+	difyAPIKey     string
+	settingsLoadAt time.Time
 }
 
 // NewBroker 创建 MQTT Broker
@@ -58,6 +73,7 @@ func NewBroker(
 	alertLogRepo *repository.AlertLogRepository,
 	otaTaskRepo *repository.OTATaskRepository,
 	firmwareRepo *repository.FirmwareRepository,
+	settingsRepo *repository.SettingsRepository,
 	rdb *cache.Redis,
 	hub *ws.Hub,
 	baseURL string,
@@ -72,6 +88,7 @@ func NewBroker(
 		alertLogRepo:   alertLogRepo,
 		otaTaskRepo:    otaTaskRepo,
 		firmwareRepo:   firmwareRepo,
+		settingsRepo:   settingsRepo,
 		rdb:            rdb,
 		hub:            hub,
 		baseURL:        baseURL,
@@ -160,4 +177,53 @@ func (b *Broker) Publish(topic string, payload []byte, retain bool, qos byte) er
 		return fmt.Errorf("mqtt server not started")
 	}
 	return b.server.Publish(topic, payload, retain, qos)
+}
+
+// GetVoiceSettings 获取语音设置（30s TTL 内存缓存，过期从 DB 重载）
+func (b *Broker) GetVoiceSettings() VoiceSettings {
+	const ttl = 30 * time.Second
+
+	b.settingsMu.RLock()
+	if !b.settingsLoadAt.IsZero() && time.Since(b.settingsLoadAt) < ttl {
+		s := VoiceSettings{Mode: b.voiceMode, APIURL: b.difyAPIURL, APIKey: b.difyAPIKey}
+		b.settingsMu.RUnlock()
+		return s
+	}
+	b.settingsMu.RUnlock()
+
+	// 重新加载
+	b.settingsMu.Lock()
+	defer b.settingsMu.Unlock()
+
+	// double-check
+	if !b.settingsLoadAt.IsZero() && time.Since(b.settingsLoadAt) < ttl {
+		return VoiceSettings{Mode: b.voiceMode, APIURL: b.difyAPIURL, APIKey: b.difyAPIKey}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if b.settingsRepo != nil {
+		kv, err := b.settingsRepo.GetAll(ctx)
+		if err != nil {
+			logger.Log.Errorf("GetVoiceSettings: %v", err)
+		} else {
+			b.voiceMode = kv["voice_mode"]
+			b.difyAPIURL = kv["dify_api_url"]
+			b.difyAPIKey = kv["dify_api_key"]
+			b.settingsLoadAt = time.Now()
+		}
+	}
+
+	if b.voiceMode == "" {
+		b.voiceMode = "local"
+	}
+	return VoiceSettings{Mode: b.voiceMode, APIURL: b.difyAPIURL, APIKey: b.difyAPIKey}
+}
+
+// InvalidateSettingsCache 清除语音设置缓存，下次调用时重新从 DB 加载
+func (b *Broker) InvalidateSettingsCache() {
+	b.settingsMu.Lock()
+	b.settingsLoadAt = time.Time{}
+	b.settingsMu.Unlock()
 }

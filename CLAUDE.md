@@ -133,7 +133,8 @@ linkflow/
 │   ├── 007_alert_system.sql        # 告警规则表 + 告警日志表 + RLS
 │   ├── 008_scheduled_tasks.sql     # 定时任务表 + RLS
 │   ├── 009_alert_enhancements.sql  # 告警冷却字段 + 告警确认字段
-│   └── 010_ota_system.sql          # 固件表 + OTA任务表 + RLS + 设备firmware_version字段
+│   ├── 010_ota_system.sql          # 固件表 + OTA任务表 + RLS + 设备firmware_version字段
+│   └── 011_platform_settings.sql  # 平台全局设置表（key-value）
 ├── web/                             # 前端项目
 │   ├── src/
 │   │   ├── api/index.ts            # Axios API 客户端
@@ -157,7 +158,9 @@ linkflow/
 │   │   │   ├── ScheduledTaskForm.tsx # 定时任务创建/编辑
 │   │   │   ├── DeviceDebug.tsx      # 设备在线调试（模拟上下线 + 属性下发 + 服务调用）
 │   │   │   ├── FirmwareList.tsx    # 固件管理（上传/列表/删除）
-│   │   │   └── OTATaskList.tsx     # OTA升级任务（创建/列表/取消 + 实时进度）
+│   │   │   ├── OTATaskList.tsx     # OTA升级任务（创建/列表/取消 + 实时进度）
+│   │   │   ├── LandingPage.tsx     # 落地页
+│   │   │   └── Settings.tsx        # 系统设置（语音模式 + Dify 连接配置）
 │   │   ├── App.tsx                 # 路由配置
 │   │   └── main.tsx                # 入口文件
 │   ├── Dockerfile                   # 前端镜像（Nginx）
@@ -475,6 +478,8 @@ docker-compose logs -f web
 - [x] 审计日志（操作记录中间件 + 前端查询页面）
 - [ ] 视频接入（RTMP）
 - [x] OTA 固件升级（固件管理 + MQTT推送 + HTTP下载 + 进度上报 + 设备上线自动推送）
+- [x] Dify 语音模式（platform_settings 表 + SettingsRepo/Handler + ai/dify.go + Broker 缓存 + Settings 页面）
+- [x] 语音指令修复：真实 MQTT 设备不直接写 device_data，由设备 telemetry/up 回传更新
 - [ ] 设备影子（Device Shadow，desired/reported 双状态 + 离线同步 delta）
 - [ ] 数据聚合查询（TimescaleDB time_bucket，支持 avg/max/min + 长时间范围图表）
 - [ ] 多渠道告警通知（SMTP 邮件 + 钉钉/企业微信 Webhook）
@@ -515,16 +520,26 @@ devices/{device_id}/ota/up            # OTA进度上报（设备 PUB）
 
 ### 语音指令处理流程
 1. 设备发布 `voice/up` topic，payload: `{"text": "打开灯"}`
-2. `VoiceHandler` 解析意图：匹配目标设备名 → 获取物模型 → 检查 voice 模块 → 匹配属性/服务
+2. `VoiceHandler` 根据 `platform_settings.voice_mode` 选择路径：
+   - **local**：本地 Pipeline NLP（PreprocessNode → DeviceLoadNode → IntentClassifyNode → EntityExtractNode → SlotValidateNode → ExecuteNode）
+   - **dify**：调用 Dify Workflow API（`ai.CallWorkflow`），返回结构化 `DifyCommand`
 3. 执行：属性设置通过 `telemetry/down` 下发，服务调用通过 `service/invoke` 下发
 4. 结果通过 `voice/down` 回传：`{"success": true, "message": "指令已执行", "action": "..."}`
 
+### 语音指令写入规则
+- **真实 MQTT 连接**（`IsClientConnected=true`）：只发 `telemetry/down`，等设备自行回传 `telemetry/up`
+- **模拟设备**（`IsClientConnected=false`）：发 `telemetry/down` 后直接写入 device_data（模拟回传）
+
 ### 关键文件
-- `internal/mqtt/broker.go` — Broker 生命周期管理 + Publish 方法 + WS推送 + 告警规则缓存
+- `internal/mqtt/broker.go` — Broker 生命周期管理 + Publish 方法 + WS推送 + 告警规则缓存 + settings缓存
 - `internal/mqtt/auth.go` — 认证 + ACL Hook + 上线WS推送
 - `internal/mqtt/hooks.go` — 连接管理 + 消息处理 Hook（分发 telemetry/event/voice）+ 告警评估
 - `internal/mqtt/validator.go` — 物模型属性校验器
-- `internal/mqtt/voice.go` — 语音指令处理器（意图解析 + 执行 + 相对值计算）
+- `internal/mqtt/voice.go` — 语音指令处理器（本地NLP Pipeline + Dify路径 + 执行）
+- `internal/ai/dify.go` — Dify Workflow API 调用（CallWorkflow，blocking模式）
+- `internal/handler/settings.go` — 平台设置 CRUD + Broker 缓存失效
+- `internal/repository/settings.go` — platform_settings 表 UPSERT
+- `migrations/011_platform_settings.sql` — 平台设置表
 
 ------
 

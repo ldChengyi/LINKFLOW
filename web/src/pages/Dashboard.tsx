@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
-  LayoutDashboard, Box, Cpu, Activity, Blocks, ScrollText, LogOut, Menu, X, ChevronDown, ChevronRight, Leaf, User, Bell, AlertTriangle, Clock, Palette, Terminal, KeyRound, Upload, Radio, Shield, ClipboardList,
+  LayoutDashboard, Box, Cpu, Activity, Blocks, ScrollText, LogOut, Menu, X, ChevronDown, ChevronRight, Leaf, User, Bell, AlertTriangle, Clock, Palette, Terminal, KeyRound, Upload, Radio, Shield, ClipboardList, Home, Settings2,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { authApi, alertLogApi, statsApi } from '../api';
@@ -35,6 +35,7 @@ import DeviceDebug from './DeviceDebug';
 import FirmwareList from './FirmwareList';
 import OTATaskList from './OTATaskList';
 import ScheduledTaskLogList from './ScheduledTaskLogList';
+import Settings from './Settings';
 
 interface UserInfo {
   user_id: string;
@@ -76,6 +77,7 @@ const navGroups: (NavItem | NavGroup)[] = [
     group: '系统', icon: Blocks, items: [
       { key: 'modules', label: '功能模块', icon: Blocks, path: '/modules' },
       { key: 'audit-logs', label: '审计日志', icon: ScrollText, path: '/audit-logs' },
+      { key: 'settings', label: '系统设置', icon: Settings2, path: '/settings' },
     ],
   },
 ];
@@ -247,6 +249,7 @@ export default function Dashboard() {
     if (path.startsWith('/scheduled-tasks')) return 'scheduled-tasks';
     if (path.startsWith('/firmwares')) return 'firmwares';
     if (path.startsWith('/ota-tasks')) return 'ota-tasks';
+    if (path.startsWith('/settings')) return 'settings';
     return 'dashboard';
   };
 
@@ -337,6 +340,10 @@ export default function Dashboard() {
           </Button>
 
           <div className="flex items-center gap-2">
+            <Button variant="ghost" size="icon" title="返回主页" onClick={() => navigate('/')}>
+              <Home className="h-5 w-5" />
+            </Button>
+
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" size="icon" title="切换主题">
@@ -404,6 +411,7 @@ export default function Dashboard() {
             <Route path="/scheduled-task-logs" element={<ScheduledTaskLogList />} />
             <Route path="/firmwares" element={<FirmwareList />} />
             <Route path="/ota-tasks" element={<OTATaskList />} />
+            <Route path="/settings" element={<Settings />} />
           </Routes>
         </main>
       </div>

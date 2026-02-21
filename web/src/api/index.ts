@@ -424,4 +424,22 @@ export const scheduledTaskLogApi = {
     }),
 };
 
+// 平台设置相关类型
+export interface PlatformSettings {
+  voice_mode: 'local' | 'dify';
+  dify_api_url: string;
+  dify_api_key: string;
+}
+
+export interface UpdateSettingsRequest {
+  voice_mode?: string;
+  dify_api_url?: string;
+  dify_api_key?: string;
+}
+
+export const settingsApi = {
+  get: () => api.get<PlatformSettings>('/settings'),
+  update: (data: UpdateSettingsRequest) => api.put<PlatformSettings>('/settings', data),
+};
+
 export default api;

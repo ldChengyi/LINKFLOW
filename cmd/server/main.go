@@ -94,9 +94,12 @@ func main() {
 	firmwareRepoApp := repository.NewFirmwareRepository(db.App())
 	otaTaskRepoApp := repository.NewOTATaskRepository(db.App())
 
+	// 平台设置 Repository（Admin pool，无 RLS）
+	settingsRepo := repository.NewSettingsRepository(db.Admin())
+
 	// 初始化 MQTT Broker
 	baseURL := "http://localhost:" + cfg.Server.Port
-	broker := mqttbroker.NewBroker(cfg.MQTT, mqttDeviceRepo, mqttThingModelRepo, deviceDataRepo, auditLogRepo, mqttAlertRuleRepo, mqttAlertLogRepo, mqttOTATaskRepo, mqttFirmwareRepo, rdb, hub, baseURL)
+	broker := mqttbroker.NewBroker(cfg.MQTT, mqttDeviceRepo, mqttThingModelRepo, deviceDataRepo, auditLogRepo, mqttAlertRuleRepo, mqttAlertLogRepo, mqttOTATaskRepo, mqttFirmwareRepo, settingsRepo, rdb, hub, baseURL)
 	if err := broker.Start(); err != nil {
 		logger.Log.Fatalf("Failed to start MQTT broker: %v", err)
 	}
@@ -121,6 +124,7 @@ func main() {
 	debugHandler := handler.NewDebugHandler(deviceRepo, thingModelRepo, deviceDataRepo, db.App(), rdb, broker)
 	firmwareHandler := handler.NewFirmwareHandler(firmwareRepoApp, mqttDeviceRepo, db.App())
 	otaTaskHandler := handler.NewOTATaskHandler(otaTaskRepoApp, firmwareRepoApp, deviceRepo, db.App(), broker, baseURL)
+	settingsHandler := handler.NewSettingsHandler(settingsRepo, broker)
 
 	// 设置路由
 	router := gin.Default()
@@ -245,6 +249,10 @@ func main() {
 				otaTasks.GET("/:id", otaTaskHandler.Get)
 				otaTasks.PUT("/:id/cancel", otaTaskHandler.Cancel)
 			}
+
+			// 平台设置路由
+			protected.GET("/settings", settingsHandler.Get)
+			protected.PUT("/settings", settingsHandler.Update)
 		}
 	}
 

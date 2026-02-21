@@ -42,7 +42,7 @@ export default function Login() {
       const { data } = await authApi.login({ email: loginEmail, password: loginPassword });
       localStorage.setItem('token', data.token);
       setFormMsg({ type: 'success', text: '登录成功，正在跳转...' });
-      setTimeout(() => { window.location.href = '/'; }, 800);
+      setTimeout(() => { window.location.href = '/devices'; }, 800);
     } catch (error: unknown) {
       const err = error as { response?: { data?: { msg?: string } } };
       const msg = err.response?.data?.msg || '登录失败，请检查邮箱和密码';
@@ -80,7 +80,7 @@ export default function Login() {
       const { data } = await authApi.register({ email: regEmail, password: regPassword });
       localStorage.setItem('token', data.token);
       setFormMsg({ type: 'success', text: '注册成功，正在跳转...' });
-      setTimeout(() => { window.location.href = '/'; }, 800);
+      setTimeout(() => { window.location.href = '/devices'; }, 800);
     } catch (error: unknown) {
       const err = error as { response?: { data?: { msg?: string } } };
       const msg = err.response?.data?.msg || '注册失败，请稍后重试';

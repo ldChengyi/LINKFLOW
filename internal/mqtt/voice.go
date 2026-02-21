@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ldchengyi/linkflow/internal/ai"
 	"github.com/ldchengyi/linkflow/internal/logger"
 	"github.com/ldchengyi/linkflow/internal/model"
 )
@@ -54,7 +55,15 @@ func (h *VoiceHandler) HandleVoiceCommand(deviceID string, payload []byte) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// 构建管道上下文并执行
+	// 根据 voice_mode 选择处理路径
+	settings := h.broker.GetVoiceSettings()
+	if settings.Mode == "dify" && settings.APIURL != "" && settings.APIKey != "" {
+		result := h.handleWithDify(ctx, deviceID, cmd.Text, info)
+		h.reply(deviceID, result)
+		return
+	}
+
+	// 本地 NLP 路径（默认）
 	pc := &PipelineContext{
 		RawText:  cmd.Text,
 		DeviceID: deviceID,
@@ -71,5 +80,198 @@ func (h *VoiceHandler) reply(deviceID string, result *model.VoiceResult) {
 	payload, _ := json.Marshal(result)
 	if err := h.broker.Publish(topic, payload, false, 1); err != nil {
 		logger.Log.Errorf("Voice: failed to reply: device_id=%s, err=%v", deviceID, err)
+	}
+}
+
+// buildDeviceContext 构建 Dify 设备上下文（JSON 字符串）
+// 只包含 voice 模块 exposed 白名单内的属性/服务
+func (h *VoiceHandler) buildDeviceContext(ctx context.Context, deviceID, userID string) (string, *model.Device, error) {
+	device, err := h.broker.deviceRepo.GetByID(ctx, deviceID)
+	if err != nil {
+		return "", nil, fmt.Errorf("设备不存在: %w", err)
+	}
+
+	if device.ModelID == nil {
+		return "", nil, fmt.Errorf("设备未绑定物模型")
+	}
+
+	tm, err := h.broker.thingModelRepo.GetByID(ctx, *device.ModelID)
+	if err != nil {
+		return "", nil, fmt.Errorf("物模型不存在: %w", err)
+	}
+
+	vm := findVoiceModule(tm)
+	if vm == nil {
+		return "", nil, fmt.Errorf("设备未启用语音模块")
+	}
+
+	// 构建过滤后的属性列表
+	type propCtx struct {
+		ID         string         `json:"id"`
+		Name       string         `json:"name"`
+		DataType   string         `json:"data_type"`
+		AccessMode string         `json:"access_mode"`
+		Min        *float64       `json:"min,omitempty"`
+		Max        *float64       `json:"max,omitempty"`
+		EnumValues []model.EnumValue `json:"enum_values,omitempty"`
+	}
+	type svcCtx struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	type deviceCtx struct {
+		DeviceID   string    `json:"device_id"`
+		DeviceName string    `json:"device_name"`
+		Properties []propCtx `json:"properties"`
+		Services   []svcCtx  `json:"services"`
+	}
+
+	dc := deviceCtx{
+		DeviceID:   device.ID,
+		DeviceName: device.Name,
+	}
+
+	for _, p := range tm.Properties {
+		if !slotExposed(p.ID, vm.Config.ExposedProperties) {
+			continue
+		}
+		pc := propCtx{
+			ID:         p.ID,
+			Name:       p.Name,
+			DataType:   p.DataType,
+			AccessMode: p.AccessMode,
+			Min:        p.Min,
+			Max:        p.Max,
+		}
+		if p.DataType == "enum" {
+			pc.EnumValues = p.EnumValues
+		}
+		dc.Properties = append(dc.Properties, pc)
+	}
+
+	for _, s := range tm.Services {
+		if !slotExposed(s.ID, vm.Config.ExposedServices) {
+			continue
+		}
+		dc.Services = append(dc.Services, svcCtx{ID: s.ID, Name: s.Name})
+	}
+
+	b, err := json.Marshal(dc)
+	if err != nil {
+		return "", nil, fmt.Errorf("marshal device context: %w", err)
+	}
+	return string(b), device, nil
+}
+
+// handleWithDify 通过 Dify 工作流处理语音指令
+func (h *VoiceHandler) handleWithDify(ctx context.Context, deviceID, text string, info DeviceInfo) *model.VoiceResult {
+	settings := h.broker.GetVoiceSettings()
+
+	deviceContext, device, err := h.buildDeviceContext(ctx, deviceID, info.UserID)
+	if err != nil {
+		logger.Log.Warnf("Voice Dify: buildDeviceContext failed: device_id=%s, err=%v", deviceID, err)
+		return &model.VoiceResult{Success: false, Message: "AI 处理失败: " + err.Error()}
+	}
+
+	difyCmd, err := ai.CallWorkflow(settings.APIURL, settings.APIKey, deviceContext, text, deviceID)
+	if err != nil {
+		logger.Log.Errorf("Voice Dify: CallWorkflow failed: device_id=%s, err=%v", deviceID, err)
+		return &model.VoiceResult{Success: false, Message: "AI 处理失败: " + err.Error()}
+	}
+
+	if difyCmd.Action == "unknown" {
+		msg := difyCmd.Message
+		if msg == "" {
+			msg = "无法识别指令"
+		}
+		return &model.VoiceResult{Success: false, Message: msg}
+	}
+
+	return h.executeDifyCommand(ctx, deviceID, info.UserID, device, difyCmd)
+}
+
+// executeDifyCommand 根据 DifyCommand 执行 MQTT 下发
+func (h *VoiceHandler) executeDifyCommand(ctx context.Context, deviceID, userID string, device *model.Device, cmd *ai.DifyCommand) *model.VoiceResult {
+	switch cmd.Action {
+	case "set_property":
+		if cmd.PropertyID == "" || cmd.Value == nil {
+			return &model.VoiceResult{Success: false, Message: "AI 返回的属性设置参数不完整"}
+		}
+
+		topic := fmt.Sprintf("devices/%s/telemetry/down", deviceID)
+		payload, _ := json.Marshal(map[string]any{cmd.PropertyID: cmd.Value})
+
+		if err := h.broker.Publish(topic, payload, false, 1); err != nil {
+			return &model.VoiceResult{Success: false, Message: "指令下发失败"}
+		}
+
+		// 仅模拟设备才直接写入 device_data；真实 MQTT 连接的设备会自行通过 telemetry/up 回传
+		if userID != "" && !h.broker.IsClientConnected(deviceID) {
+			merged := map[string]any{cmd.PropertyID: cmd.Value}
+			if existing, err := h.broker.deviceDataRepo.GetLatestData(ctx, deviceID); err == nil && existing != nil {
+				for k, v := range existing.Payload {
+					if _, set := merged[k]; !set {
+						merged[k] = v
+					}
+				}
+			}
+			storeTopic := fmt.Sprintf("devices/%s/telemetry/up", deviceID)
+			_ = h.broker.deviceDataRepo.InsertTelemetry(ctx, deviceID, userID, storeTopic, merged, 1, true, nil)
+		}
+
+		action := fmt.Sprintf("设置 %s.%s = %v", device.Name, cmd.PropertyID, cmd.Value)
+		logger.Log.Infof("Voice Dify executed: %s", action)
+		msg := cmd.Message
+		if msg == "" {
+			msg = "指令已执行"
+		}
+		return &model.VoiceResult{Success: true, Message: msg, Action: action}
+
+	case "invoke_service":
+		if cmd.ServiceID == "" {
+			return &model.VoiceResult{Success: false, Message: "AI 返回的服务调用参数不完整"}
+		}
+
+		params := cmd.Params
+		if params == nil {
+			params = map[string]any{}
+		}
+
+		topic := fmt.Sprintf("devices/%s/service/invoke", deviceID)
+		payload, _ := json.Marshal(map[string]any{
+			"id":      fmt.Sprintf("dify_%d", time.Now().UnixMilli()),
+			"service": cmd.ServiceID,
+			"params":  params,
+		})
+
+		if err := h.broker.Publish(topic, payload, false, 1); err != nil {
+			return &model.VoiceResult{Success: false, Message: "服务调用失败"}
+		}
+
+		action := fmt.Sprintf("调用 %s.%s", device.Name, cmd.ServiceID)
+		logger.Log.Infof("Voice Dify executed: %s", action)
+		msg := cmd.Message
+		if msg == "" {
+			msg = "服务已调用"
+		}
+		return &model.VoiceResult{Success: true, Message: msg, Action: action}
+
+	case "query_status":
+		if cmd.PropertyID == "" {
+			return &model.VoiceResult{Success: false, Message: "AI 返回的查询参数不完整"}
+		}
+		data, err := h.broker.deviceDataRepo.GetLatestData(ctx, deviceID)
+		if err != nil || data == nil {
+			return &model.VoiceResult{Success: false, Message: "无法获取设备数据"}
+		}
+		val, ok := data.Payload[cmd.PropertyID]
+		if !ok {
+			return &model.VoiceResult{Success: false, Message: fmt.Sprintf("属性 %s 无数据", cmd.PropertyID)}
+		}
+		action := fmt.Sprintf("查询 %s.%s = %v", device.Name, cmd.PropertyID, val)
+		return &model.VoiceResult{Success: true, Message: fmt.Sprintf("%s 当前值: %v", cmd.PropertyID, val), Action: action}
+
+	default:
+		return &model.VoiceResult{Success: false, Message: fmt.Sprintf("未知指令类型: %s", cmd.Action)}
 	}
 }
