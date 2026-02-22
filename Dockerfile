@@ -3,12 +3,14 @@ FROM golang:1.24-alpine AS builder
 
 WORKDIR /app
 
-# Use vendor mode - no network download needed inside container
-ENV GOFLAGS=-mod=vendor
+# Set Go proxy for China
+ENV GOPROXY=https://goproxy.cn,direct
 
-# Copy go mod files and vendor directory
+# Copy go mod files
 COPY go.mod go.sum ./
-COPY vendor/ ./vendor/
+
+# Download dependencies
+RUN go mod download
 
 # Copy source code
 COPY . .
@@ -20,6 +22,9 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /app/server ./cmd/server
 FROM alpine:3.19
 
 WORKDIR /app
+
+# Use China mirror for faster package download
+RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories
 
 # Install ca-certificates for HTTPS
 RUN apk add --no-cache ca-certificates tzdata
