@@ -184,7 +184,7 @@ func (h *DeviceHandler) Delete(c *gin.Context) {
 	Success(c, nil)
 }
 
-// History 获取设备历史遥测数据
+// History 获取设备历史遥测数据（根据时间范围自动选择聚合粒度）
 func (h *DeviceHandler) History(c *gin.Context) {
 	ctx, err := h.withRLS(c)
 	if err != nil {
@@ -211,18 +211,55 @@ func (h *DeviceHandler) History(c *gin.Context) {
 			end = t
 		}
 	}
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "200"))
-	if limit < 1 || limit > 1000 {
-		limit = 200
+
+	duration := end.Sub(start)
+
+	// 根据时长自动选择聚合粒度
+	// ≤2h → 原始数据; ≤12h → 5min; ≤48h → 15min; ≤7d → 1h; >7d → 6h
+	var interval string
+	switch {
+	case duration <= 2*time.Hour:
+		interval = "" // 原始数据
+	case duration <= 12*time.Hour:
+		interval = "5 minutes"
+	case duration <= 48*time.Hour:
+		interval = "15 minutes"
+	case duration <= 7*24*time.Hour:
+		interval = "1 hour"
+	default:
+		interval = "6 hours"
 	}
 
-	data, err := h.dataRepo.GetDataHistory(ctx, id, start, end, limit)
+	if interval == "" {
+		limit, _ := strconv.Atoi(c.DefaultQuery("limit", "200"))
+		if limit < 1 || limit > 1000 {
+			limit = 200
+		}
+		data, err := h.dataRepo.GetDataHistory(ctx, id, start, end, limit)
+		if err != nil {
+			logger.Log.Errorf("Failed to get history data for device %s: %v", id, err)
+			Fail(c, http.StatusInternalServerError, "failed to get history data")
+			return
+		}
+		Success(c, gin.H{
+			"aggregated": false,
+			"interval":   "",
+			"data":       data,
+		})
+		return
+	}
+
+	aggData, err := h.dataRepo.GetDataHistoryAggregated(ctx, id, start, end, interval)
 	if err != nil {
-		logger.Log.Errorf("Failed to get history data for device %s: %v", id, err)
+		logger.Log.Errorf("Failed to get aggregated history data for device %s: %v", id, err)
 		Fail(c, http.StatusInternalServerError, "failed to get history data")
 		return
 	}
-	Success(c, data)
+	Success(c, gin.H{
+		"aggregated": true,
+		"interval":   interval,
+		"data":       aggData,
+	})
 }
 
 // ExportCSV 导出设备历史数据为 CSV

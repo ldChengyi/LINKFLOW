@@ -182,6 +182,19 @@ export interface DeviceHistoryData {
   valid: boolean;
 }
 
+export interface AggregatedDataPoint {
+  time: string;
+  payload: Record<string, number>;
+  max_payload: Record<string, number>;
+  min_payload: Record<string, number>;
+}
+
+export interface HistoryApiResponse {
+  aggregated: boolean;
+  interval: string;
+  data: DeviceHistoryData[] | AggregatedDataPoint[] | null;
+}
+
 export const deviceApi = {
   list: (page = 1, pageSize = 10) =>
     api.get<ListResponse<Device>>('/devices', { params: { page, page_size: pageSize } }),
@@ -191,7 +204,7 @@ export const deviceApi = {
   delete: (id: string) => api.delete(`/devices/${id}`),
   latestData: (id: string) => api.get<DeviceLatestData | null>(`/devices/${id}/data/latest`),
   dataHistory: (id: string, start: string, end: string, limit = 200) =>
-    api.get<DeviceHistoryData[]>(`/devices/${id}/data/history`, { params: { start, end, limit } }),
+    api.get<HistoryApiResponse>(`/devices/${id}/data/history`, { params: { start, end, limit } }),
   exportHistory: (id: string, start: string, end: string, limit = 1000) =>
     api.get(`/devices/${id}/data/export`, { params: { start, end, limit }, responseType: 'blob' }),
   debug: (id: string, data: { action_type: string; property_id?: string; properties?: Record<string, unknown>; service_id?: string; value?: unknown }) =>

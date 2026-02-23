@@ -95,6 +95,74 @@ func (r *DeviceDataRepository) query(ctx context.Context, sql string, args ...an
 	return r.pool.Query(ctx, sql, args...)
 }
 
+// AggregatedDataPoint 聚合数据点（avg/max/min）
+type AggregatedDataPoint struct {
+	Time       time.Time          `json:"time"`
+	Payload    map[string]float64 `json:"payload"`
+	MaxPayload map[string]float64 `json:"max_payload"`
+	MinPayload map[string]float64 `json:"min_payload"`
+}
+
+// GetDataHistoryAggregated 按时间窗口聚合查询历史遥测数据（avg/max/min）
+func (r *DeviceDataRepository) GetDataHistoryAggregated(
+	ctx context.Context, deviceID string,
+	start, end time.Time, interval string,
+) ([]AggregatedDataPoint, error) {
+	rows, err := r.query(ctx, `
+		SELECT
+		  time_bucket($1::interval, time) AS bucket,
+		  kv.key,
+		  ROUND(AVG(kv.value::numeric), 2) AS avg_val,
+		  ROUND(MAX(kv.value::numeric), 2) AS max_val,
+		  ROUND(MIN(kv.value::numeric), 2) AS min_val
+		FROM device_data,
+		  LATERAL (
+		    SELECT key, value
+		    FROM jsonb_each_text(payload)
+		    WHERE value ~ '^-?[0-9]+(\.[0-9]+)?$'
+		  ) kv(key, value)
+		WHERE device_id = $2 AND time BETWEEN $3 AND $4
+		GROUP BY bucket, kv.key
+		ORDER BY bucket ASC
+	`, interval, deviceID, start, end)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	// pivot: bucket → AggregatedDataPoint
+	bucketMap := make(map[time.Time]*AggregatedDataPoint)
+	var bucketOrder []time.Time
+
+	for rows.Next() {
+		var bucket time.Time
+		var key string
+		var avgVal, maxVal, minVal float64
+		if err := rows.Scan(&bucket, &key, &avgVal, &maxVal, &minVal); err != nil {
+			return nil, err
+		}
+		if _, ok := bucketMap[bucket]; !ok {
+			bucketMap[bucket] = &AggregatedDataPoint{
+				Time:       bucket,
+				Payload:    make(map[string]float64),
+				MaxPayload: make(map[string]float64),
+				MinPayload: make(map[string]float64),
+			}
+			bucketOrder = append(bucketOrder, bucket)
+		}
+		pt := bucketMap[bucket]
+		pt.Payload[key] = avgVal
+		pt.MaxPayload[key] = maxVal
+		pt.MinPayload[key] = minVal
+	}
+
+	result := make([]AggregatedDataPoint, 0, len(bucketOrder))
+	for _, b := range bucketOrder {
+		result = append(result, *bucketMap[b])
+	}
+	return result, nil
+}
+
 // GetLatestData 获取设备最新一条遥测数据
 func (r *DeviceDataRepository) GetLatestData(ctx context.Context, deviceID string) (*DeviceLatestData, error) {
 	var (

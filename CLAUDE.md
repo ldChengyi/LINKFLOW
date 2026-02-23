@@ -366,6 +366,18 @@ linkflow/
     - WebSocket 实时进度推送（ota_progress 消息类型）
     - 前端：固件管理页（上传/列表/删除）+ OTA任务页（创建/列表/取消 + 实时进度条）
 
+27. **数据聚合查询**
+    - History API 根据查询时长自动选择聚合粒度（无需前端传 interval）：
+      - ≤ 2h → 原始数据（返回 `aggregated: false`）
+      - ≤ 12h → 5 分钟窗口（≤ 144 点）
+      - ≤ 48h → 15 分钟窗口（≤ 192 点）
+      - ≤ 7d → 1 小时窗口（≤ 168 点）
+      - > 7d → 6 小时窗口（≤ 120 点）
+    - 统一响应格式：`{ aggregated, interval, data }`；聚合时每点包含 `payload`(avg) / `max_payload` / `min_payload`
+    - SQL：`time_bucket($1::interval, time)` + `LATERAL jsonb_each_text(payload)` 过滤数值字段，Go 侧 pivot 到结构体
+    - 前端：新增 30d 时间范围选项；聚合模式每属性渲染 3 条 Line（均值实线 + 上/下边界虚线）；底部显示聚合粒度文字
+    - 关键文件：`internal/repository/device_data.go`（`GetDataHistoryAggregated`）、`internal/handler/device.go`（`History`）、`web/src/pages/DeviceData.tsx`
+
 ------
 
 ## API 端点
@@ -398,7 +410,7 @@ linkflow/
 | GET    | /api/alert-rules/:id        | 告警规则详情       | 是   |
 | PUT    | /api/alert-rules/:id        | 更新告警规则       | 是   |
 | DELETE | /api/alert-rules/:id        | 删除告警规则       | 是   |
-| GET    | /api/devices/:id/data/history | 设备历史遥测数据 | 是   |
+| GET    | /api/devices/:id/data/history | 设备历史遥测数据（自动聚合，返回 `{aggregated,interval,data}`） | 是   |
 | GET    | /api/alert-logs             | 告警历史（?device_id 筛选） | 是   |
 | PUT    | /api/alert-logs/:id/acknowledge | 确认告警           | 是   |
 | GET    | /api/devices/:id/data/export | 设备历史数据 CSV 导出 | 是  |
@@ -481,7 +493,7 @@ docker-compose logs -f web
 - [x] Dify 语音模式（platform_settings 表 + SettingsRepo/Handler + ai/dify.go + Broker 缓存 + Settings 页面）
 - [x] 语音指令修复：真实 MQTT 设备不直接写 device_data，由设备 telemetry/up 回传更新
 - [ ] 设备影子（Device Shadow，desired/reported 双状态 + 离线同步 delta）
-- [ ] 数据聚合查询（TimescaleDB time_bucket，支持 avg/max/min + 长时间范围图表）
+- [x] 数据聚合查询（TimescaleDB time_bucket，自动选粒度，avg/max/min 三线图表，30d 范围支持）
 - [ ] 多渠道告警通知（SMTP 邮件 + 钉钉/企业微信 Webhook）
 - [ ] Webhook 数据转发（规则引擎轻量版，遥测数据 POST 转发到第三方）
 
@@ -739,6 +751,7 @@ alert_logs (id BIGSERIAL PK, rule_id, user_id, device_id, device_name, property_
 | `tests/api_module_test.go` | 功能模块 API 测试（列表 + 详情） |
 | `tests/api_alert_test.go` | 告警规则 CRUD + 告警日志列表 API 测试 |
 | `tests/api_scheduled_task_test.go` | 定时任务 CRUD API 测试 |
+| `tests/api_device_data_test.go` | 历史遥测数据聚合 API 测试（raw/5min/1h/6h 四档 + 空结果） |
 
 ### Mock 生成
 

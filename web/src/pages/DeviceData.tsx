@@ -3,7 +3,7 @@ import { toast } from 'sonner';
 import { Activity, RefreshCw, Copy, Check, Mic, Blocks, Clock, Download } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { deviceApi, thingModelApi } from '../api';
-import type { Device, ThingModel, DeviceLatestData, DeviceHistoryData, Property } from '../api';
+import type { Device, ThingModel, DeviceLatestData, DeviceHistoryData, Property, AggregatedDataPoint } from '../api';
 import { onWSMessage } from './Dashboard';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -23,6 +23,9 @@ export default function DeviceData() {
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [historyData, setHistoryData] = useState<DeviceHistoryData[]>([]);
+  const [aggHistoryData, setAggHistoryData] = useState<AggregatedDataPoint[]>([]);
+  const [historyAggregated, setHistoryAggregated] = useState(false);
+  const [historyInterval, setHistoryInterval] = useState('');
   const [historyRange, setHistoryRange] = useState('1h');
   const [historyLoading, setHistoryLoading] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -86,12 +89,23 @@ export default function DeviceData() {
     if (!selectedId) return;
     setHistoryLoading(true);
     const end = new Date().toISOString();
-    const ms: Record<string, number> = { '1h': 3600000, '6h': 21600000, '24h': 86400000, '7d': 604800000 };
-    const limits: Record<string, number> = { '1h': 200, '6h': 500, '24h': 1000, '7d': 1000 };
+    const ms: Record<string, number> = { '1h': 3600000, '6h': 21600000, '24h': 86400000, '7d': 604800000, '30d': 2592000000 };
+    const limits: Record<string, number> = { '1h': 200, '6h': 500, '24h': 1000, '7d': 1000, '30d': 1000 };
     const start = new Date(Date.now() - (ms[range] || 3600000)).toISOString();
     try {
       const res = await deviceApi.dataHistory(selectedId, start, end, limits[range] || 200);
-      setHistoryData(res.data || []);
+      const resp = res.data;
+      if (resp.aggregated) {
+        setHistoryData([]);
+        setAggHistoryData((resp.data as AggregatedDataPoint[]) || []);
+        setHistoryAggregated(true);
+        setHistoryInterval(resp.interval);
+      } else {
+        setAggHistoryData([]);
+        setHistoryData((resp.data as DeviceHistoryData[]) || []);
+        setHistoryAggregated(false);
+        setHistoryInterval('');
+      }
     } catch { /* silent */ }
     finally { setHistoryLoading(false); }
   };
@@ -104,7 +118,7 @@ export default function DeviceData() {
     if (!selectedId) return;
     setExporting(true);
     const end = new Date().toISOString();
-    const ms: Record<string, number> = { '1h': 3600000, '6h': 21600000, '24h': 86400000, '7d': 604800000 };
+    const ms: Record<string, number> = { '1h': 3600000, '6h': 21600000, '24h': 86400000, '7d': 604800000, '30d': 2592000000 };
     const start = new Date(Date.now() - (ms[historyRange] || 3600000)).toISOString();
     try {
       const res = await deviceApi.exportHistory(selectedId, start, end, 1000);
@@ -126,25 +140,32 @@ export default function DeviceData() {
     [thingModel]
   );
 
-  const chartData = useMemo(() =>
-    historyData.map(d => {
-      const date = new Date(d.time);
-      let timeLabel: string;
-      if (historyRange === '7d') {
-        timeLabel = `${date.getMonth() + 1}/${date.getDate()} ${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
-      } else if (historyRange === '24h') {
-        timeLabel = `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
-      } else {
-        // 1h / 6h: 显示 HH:MM:SS
-        timeLabel = date.toLocaleTimeString();
-      }
-      return {
-        time: timeLabel,
-        ...Object.fromEntries(numericProps.map(p => [p.id, d.payload[p.id] ?? null])),
-      };
-    }),
-    [historyData, numericProps, historyRange]
-  );
+  const formatTimeLabel = (date: Date, range: string): string => {
+    if (range === '30d' || range === '7d') {
+      return `${date.getMonth() + 1}/${date.getDate()} ${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
+    } else if (range === '24h') {
+      return `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
+    }
+    return date.toLocaleTimeString();
+  };
+
+  const chartData = useMemo(() => {
+    if (historyAggregated) {
+      return aggHistoryData.map(d => {
+        const entry: Record<string, unknown> = { time: formatTimeLabel(new Date(d.time), historyRange) };
+        numericProps.forEach(p => {
+          entry[`${p.id}_avg`] = d.payload[p.id] ?? null;
+          entry[`${p.id}_max`] = d.max_payload[p.id] ?? null;
+          entry[`${p.id}_min`] = d.min_payload[p.id] ?? null;
+        });
+        return entry;
+      });
+    }
+    return historyData.map(d => ({
+      time: formatTimeLabel(new Date(d.time), historyRange),
+      ...Object.fromEntries(numericProps.map(p => [p.id, d.payload[p.id] ?? null])),
+    }));
+  }, [historyData, aggHistoryData, historyAggregated, numericProps, historyRange]);
 
   const COLORS = ['#10b981', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
 
@@ -756,10 +777,13 @@ export default function DeviceData() {
                   <CardTitle className="text-base">历史趋势</CardTitle>
                   <div className="flex items-center gap-2">
                     <div className="flex gap-1">
-                      {['1h', '6h', '24h', '7d'].map(r => (
-                        <Button key={r} size="sm" variant={historyRange === r ? 'default' : 'outline'}
-                          onClick={() => setHistoryRange(r)}>{r === '1h' ? '1小时' : r === '6h' ? '6小时' : r === '24h' ? '24小时' : '7天'}</Button>
-                      ))}
+                      {(['1h', '6h', '24h', '7d', '30d'] as const).map(r => {
+                        const labels: Record<string, string> = { '1h': '1小时', '6h': '6小时', '24h': '24小时', '7d': '7天', '30d': '30天' };
+                        return (
+                          <Button key={r} size="sm" variant={historyRange === r ? 'default' : 'outline'}
+                            onClick={() => setHistoryRange(r)}>{labels[r]}</Button>
+                        );
+                      })}
                     </div>
                     <Button size="sm" variant="outline" onClick={handleExportCSV} disabled={exporting || !selectedId}>
                       <Download className="h-4 w-4 mr-1" />
@@ -776,19 +800,43 @@ export default function DeviceData() {
                 ) : chartData.length === 0 ? (
                   <p className="text-center py-10 text-muted-foreground">该时间范围内暂无数据</p>
                 ) : (
-                  <ResponsiveContainer width="100%" height={400}>
-                    <LineChart data={chartData}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#333" />
-                      <XAxis dataKey="time" tick={{ fontSize: 12 }} stroke="#888" />
-                      <YAxis tick={{ fontSize: 12 }} stroke="#888" />
-                      <Tooltip contentStyle={{ background: '#1a1a2e', border: '1px solid #333', borderRadius: 8 }} />
-                      <Legend />
-                      {numericProps.map((p, i) => (
-                        <Line key={p.id} type="monotone" dataKey={p.id} name={`${p.name}${p.unit ? ` (${p.unit})` : ''}`}
-                          stroke={COLORS[i % COLORS.length]} dot={false} strokeWidth={2} connectNulls={true} />
-                      ))}
-                    </LineChart>
-                  </ResponsiveContainer>
+                  <>
+                    <ResponsiveContainer width="100%" height={400}>
+                      <LineChart data={chartData}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#333" />
+                        <XAxis dataKey="time" tick={{ fontSize: 12 }} stroke="#888" />
+                        <YAxis tick={{ fontSize: 12 }} stroke="#888" />
+                        <Tooltip contentStyle={{ background: '#1a1a2e', border: '1px solid #333', borderRadius: 8 }} />
+                        <Legend />
+                        {historyAggregated ? (
+                          numericProps.flatMap((p, i) => {
+                            const color = COLORS[i % COLORS.length];
+                            const name = `${p.name}${p.unit ? ` (${p.unit})` : ''}`;
+                            return [
+                              <Line key={`${p.id}_avg`} type="monotone" dataKey={`${p.id}_avg`} name={name}
+                                stroke={color} dot={false} strokeWidth={2} connectNulls={true} />,
+                              <Line key={`${p.id}_max`} type="monotone" dataKey={`${p.id}_max`} name={`${name} 最大`}
+                                stroke={color} dot={false} strokeWidth={1} strokeDasharray="4 2"
+                                strokeOpacity={0.5} connectNulls={true} legendType="none" />,
+                              <Line key={`${p.id}_min`} type="monotone" dataKey={`${p.id}_min`} name={`${name} 最小`}
+                                stroke={color} dot={false} strokeWidth={1} strokeDasharray="4 2"
+                                strokeOpacity={0.5} connectNulls={true} legendType="none" />,
+                            ];
+                          })
+                        ) : (
+                          numericProps.map((p, i) => (
+                            <Line key={p.id} type="monotone" dataKey={p.id} name={`${p.name}${p.unit ? ` (${p.unit})` : ''}`}
+                              stroke={COLORS[i % COLORS.length]} dot={false} strokeWidth={2} connectNulls={true} />
+                          ))
+                        )}
+                      </LineChart>
+                    </ResponsiveContainer>
+                    {historyAggregated && historyInterval && (
+                      <p className="text-xs text-muted-foreground text-right mt-2">
+                        数据聚合粒度：{historyInterval}（实线为均值，虚线为上/下边界）
+                      </p>
+                    )}
+                  </>
                 )}
               </CardContent>
             </Card>

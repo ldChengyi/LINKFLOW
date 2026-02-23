@@ -532,5 +532,20 @@ CREATE INDEX IF NOT EXISTS idx_stl_device_id  ON scheduled_task_logs(device_id);
 CREATE INDEX IF NOT EXISTS idx_stl_user_id    ON scheduled_task_logs(user_id);
 CREATE INDEX IF NOT EXISTS idx_stl_created_at ON scheduled_task_logs(created_at DESC);
 
+-- ============ Platform Settings Table (平台全局配置) ============
+CREATE TABLE IF NOT EXISTS platform_settings (
+    key        VARCHAR(100) PRIMARY KEY,
+    value      TEXT NOT NULL DEFAULT '',
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+INSERT INTO platform_settings (key, value) VALUES
+    ('voice_mode',    'local'),
+    ('dify_api_url',  ''),
+    ('dify_api_key',  '')
+ON CONFLICT (key) DO NOTHING;
+
+GRANT SELECT, INSERT, UPDATE ON platform_settings TO linkflow_admin;
+
 -- Done
 SELECT 'LinkFlow database initialized successfully!' AS status;
