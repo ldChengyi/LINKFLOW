@@ -4,6 +4,7 @@ import { Toaster } from 'sonner';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import LandingPage from './pages/LandingPage';
+import DocsPage from './pages/DocsPage';
 import { authApi } from './api';
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
@@ -41,6 +42,7 @@ function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/" element={<LandingPage />} />
+          <Route path="/docs" element={<DocsPage />} />
           <Route path="/login" element={<Login />} />
           <Route
             path="/*"

@@ -26,19 +26,21 @@ export default function DeviceForm() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [thingModels, setThingModels] = useState<ThingModel[]>([]);
-  const [copied, setCopied] = useState(false);
+  // 分别跟踪两个字段的复制状态
+  const [copiedField, setCopiedField] = useState<'id' | 'secret' | null>(null);
 
   // Form fields
   const [name, setName] = useState('');
   const [modelId, setModelId] = useState('');
   const [metadata, setMetadata] = useState('');
 
-  // Device info (edit mode)
+  // Device info (edit mode) — id 直接来自 useParams，无需额外 state
   const [deviceSecret, setDeviceSecret] = useState('');
   const [deviceStatus, setDeviceStatus] = useState('');
 
   // Secret modal (create mode)
   const [secretModalOpen, setSecretModalOpen] = useState(false);
+  const [newDeviceId, setNewDeviceId] = useState('');
   const [newSecret, setNewSecret] = useState('');
 
   useEffect(() => {
@@ -100,6 +102,7 @@ export default function DeviceForm() {
         navigate('/devices');
       } else {
         const res = await deviceApi.create(data);
+        setNewDeviceId(res.data.id);
         setNewSecret(res.data.device_secret);
         setSecretModalOpen(true);
       }
@@ -111,10 +114,10 @@ export default function DeviceForm() {
     }
   };
 
-  const handleCopySecret = async (secret: string) => {
-    await navigator.clipboard.writeText(secret);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  const handleCopy = async (text: string, field: 'id' | 'secret') => {
+    await navigator.clipboard.writeText(text);
+    setCopiedField(field);
+    setTimeout(() => setCopiedField(null), 2000);
   };
 
   if (loading) {
@@ -189,12 +192,21 @@ export default function DeviceForm() {
                 </Badge>
               </div>
               <div className="flex items-center gap-2">
-                <span className="text-sm font-medium">设备密钥：</span>
+                <span className="text-sm font-medium shrink-0">Client ID：</span>
+                <code className="text-sm bg-background px-3 py-1 rounded font-mono flex-1 break-all">
+                  {id}
+                </code>
+                <Button variant="ghost" size="icon" onClick={() => handleCopy(id!, 'id')}>
+                  {copiedField === 'id' ? <Check className="h-4 w-4 text-primary" /> : <Copy className="h-4 w-4" />}
+                </Button>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium shrink-0">设备密钥：</span>
                 <code className="text-sm bg-background px-3 py-1 rounded font-mono flex-1 break-all">
                   {deviceSecret}
                 </code>
-                <Button variant="ghost" size="icon" onClick={() => handleCopySecret(deviceSecret)}>
-                  {copied ? <Check className="h-4 w-4 text-primary" /> : <Copy className="h-4 w-4" />}
+                <Button variant="ghost" size="icon" onClick={() => handleCopy(deviceSecret, 'secret')}>
+                  {copiedField === 'secret' ? <Check className="h-4 w-4 text-primary" /> : <Copy className="h-4 w-4" />}
                 </Button>
               </div>
             </div>
@@ -208,20 +220,37 @@ export default function DeviceForm() {
           <DialogHeader>
             <DialogTitle>设备创建成功</DialogTitle>
             <DialogDescription>
-              请妥善保存设备密钥，此密钥用于设备接入认证：
+              请妥善保存以下认证信息，用于 MQTT 设备接入：
             </DialogDescription>
           </DialogHeader>
-          <div className="bg-muted p-4 rounded-lg font-mono text-sm break-all">
-            {newSecret}
+          <div className="space-y-3">
+            <div>
+              <p className="text-xs text-muted-foreground mb-1">Client ID（MQTT 用户名）</p>
+              <div className="flex items-center gap-2">
+                <code className="bg-muted px-3 py-2 rounded font-mono text-sm flex-1 break-all">
+                  {newDeviceId}
+                </code>
+                <Button variant="ghost" size="icon" onClick={() => handleCopy(newDeviceId, 'id')}>
+                  {copiedField === 'id' ? <Check className="h-4 w-4 text-primary" /> : <Copy className="h-4 w-4" />}
+                </Button>
+              </div>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground mb-1">设备密钥（MQTT 密码）</p>
+              <div className="flex items-center gap-2">
+                <code className="bg-muted px-3 py-2 rounded font-mono text-sm flex-1 break-all">
+                  {newSecret}
+                </code>
+                <Button variant="ghost" size="icon" onClick={() => handleCopy(newSecret, 'secret')}>
+                  {copiedField === 'secret' ? <Check className="h-4 w-4 text-primary" /> : <Copy className="h-4 w-4" />}
+                </Button>
+              </div>
+            </div>
           </div>
           <p className="text-sm text-destructive">
             请立即复制保存，关闭后可在设备详情中查看。
           </p>
           <DialogFooter>
-            <Button variant="outline" onClick={() => handleCopySecret(newSecret)}>
-              {copied ? <Check className="h-4 w-4 mr-2" /> : <Copy className="h-4 w-4 mr-2" />}
-              复制密钥
-            </Button>
             <Button onClick={() => { setSecretModalOpen(false); navigate('/devices'); }}>
               我已保存，关闭
             </Button>
