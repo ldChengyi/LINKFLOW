@@ -24,6 +24,19 @@ web/dist-ssr/
 # Logs
 *.log
 logs/
+docs/
+
+# Vendor (use go mod download instead)
+vendor/
+
+# Test artifacts
+tests/uploads/
+
+# Simulator config (contains device secrets)
+simulator/config.json
+
+# Firmware uploads
+uploads/
 
 # IDE / Editor
 .idea/
