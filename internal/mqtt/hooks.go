@@ -38,6 +38,14 @@ func (h *EventHook) OnConnect(cl *mochi.Client, pk packets.Packet) error {
 func (h *EventHook) OnDisconnect(cl *mochi.Client, err error, expire bool) {
 	deviceID := cl.ID
 
+	// 防御"旧连接延迟断开"：如果同一 clientID 已有新的活跃连接，
+	// 说明这是旧连接的 stale disconnect，跳过离线处理。
+	// 典型场景：设备未发 DISCONNECT 直接重启，新连接先于旧连接断开回调。
+	if h.broker.IsClientConnected(deviceID) {
+		logger.Log.Infof("Device disconnect skipped (new connection exists): device_id=%s", deviceID)
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
