@@ -29,8 +29,9 @@ RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories
 # Install ca-certificates for HTTPS
 RUN apk add --no-cache ca-certificates tzdata
 
-# Copy binary
+# Copy binary and migrations
 COPY --from=builder /app/server .
+COPY --from=builder /app/migrations ./migrations
 
 # Create uploads directory
 RUN mkdir -p /app/uploads/firmwares

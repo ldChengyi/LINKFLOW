@@ -51,6 +51,11 @@ func main() {
 	defer db.Close()
 	logger.Log.Info("Database connected")
 
+	// Auto-migrate
+	if err := database.Migrate(ctx, db.Admin(), "migrations"); err != nil {
+		logger.Log.Fatalf("Failed to run migrations: %v", err)
+	}
+
 	// 初始化 Redis
 	rdb, err := cache.NewRedis(cfg.Redis.Addr, cfg.Redis.Password, cfg.Redis.DB)
 	if err != nil {

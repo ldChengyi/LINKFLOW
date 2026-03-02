@@ -6,5 +6,4 @@
 *.md
 Dockerfile
 docker-compose.yml
-migrations/
 scripts/
