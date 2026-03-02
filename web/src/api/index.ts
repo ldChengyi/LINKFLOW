@@ -437,6 +437,31 @@ export const scheduledTaskLogApi = {
     }),
 };
 
+// 服务调用日志相关类型
+export interface ServiceCallLog {
+  id: number;
+  device_id: string;
+  user_id: string;
+  device_name: string;
+  service_id: string;
+  service_name: string;
+  request_id: string;
+  input_params: unknown;
+  output_params?: unknown;
+  status: 'pending' | 'success' | 'failed' | 'timeout';
+  error?: string;
+  response_code?: number;
+  created_at: string;
+  replied_at?: string;
+}
+
+export const serviceCallLogApi = {
+  list: (page = 1, pageSize = 20, deviceId?: string) =>
+    api.get<ListResponse<ServiceCallLog>>('/service-call-logs', {
+      params: { page, page_size: pageSize, ...(deviceId ? { device_id: deviceId } : {}) },
+    }),
+};
+
 // 平台设置相关类型
 export interface PlatformSettings {
   voice_mode: 'local' | 'dify';

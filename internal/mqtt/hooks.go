@@ -136,6 +136,12 @@ func (h *EventHook) OnPublished(cl *mochi.Client, pk packets.Packet) {
 		return
 	}
 
+	// 服务调用回复
+	if strings.Contains(topic, "/service/reply") {
+		go h.handleServiceReply(deviceID, pk.Payload)
+		return
+	}
+
 	// 从缓存获取设备信息，未命中则查 DB 并缓存
 	info, ok := h.loadDeviceInfo(deviceID)
 	if !ok {
@@ -419,7 +425,71 @@ func (h *EventHook) handleOTAProgress(deviceID string, payload []byte) {
 	logger.Log.Infof("OTA progress: device=%s, task=%s, status=%s, progress=%d", deviceID, msg.TaskID, msg.Status, msg.Progress)
 }
 
+// handleServiceReply 处理设备服务调用回复
+func (h *EventHook) handleServiceReply(deviceID string, payload []byte) {
+	var msg struct {
+		ID      string          `json:"id"`
+		Service string          `json:"service"`
+		Code    int             `json:"code"`
+		Message string          `json:"message"`
+		Output  json.RawMessage `json:"output"`
+	}
+	if err := json.Unmarshal(payload, &msg); err != nil {
+		logger.Log.Warnf("Invalid service reply payload: device_id=%s, err=%v", deviceID, err)
+		return
+	}
+
+	if msg.ID == "" {
+		logger.Log.Warnf("Service reply missing request id: device_id=%s", deviceID)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// 确定状态
+	status := "success"
+	errMsg := ""
+	if msg.Code != 200 && msg.Code != 0 {
+		status = "failed"
+		errMsg = msg.Message
+	}
+
+	// 序列化输出参数
+	var outputBytes []byte
+	if msg.Output != nil {
+		outputBytes = msg.Output
+	} else {
+		outputBytes = []byte("{}")
+	}
+
+	if err := h.broker.svcCallLogRepo.UpdateReply(ctx, msg.ID, outputBytes, msg.Code, status, errMsg); err != nil {
+		logger.Log.Errorf("Failed to update service call reply: request_id=%s, err=%v", msg.ID, err)
+		return
+	}
+
+	// WS 推送 service_reply
+	info, ok := h.loadDeviceInfo(deviceID)
+	if ok && h.broker.hub != nil {
+		h.broker.hub.SendToUser(info.UserID, &ws.Message{
+			Type: "service_reply",
+			Data: map[string]interface{}{
+				"request_id":    msg.ID,
+				"device_id":     deviceID,
+				"device_name":   info.DeviceName,
+				"service":       msg.Service,
+				"code":          msg.Code,
+				"message":       msg.Message,
+				"output":        msg.Output,
+				"status":        status,
+			},
+		})
+	}
+
+	logger.Log.Infof("Service reply: device=%s, request_id=%s, service=%s, code=%d", deviceID, msg.ID, msg.Service, msg.Code)
+}
+
 // shouldProcess 判断是否需要处理该 topic 的消息
 func shouldProcess(topic string) bool {
-	return strings.Contains(topic, "/telemetry/up") || strings.Contains(topic, "/event") || strings.Contains(topic, "/voice/up") || strings.Contains(topic, "/ota/up")
+	return strings.Contains(topic, "/telemetry/up") || strings.Contains(topic, "/event") || strings.Contains(topic, "/voice/up") || strings.Contains(topic, "/ota/up") || strings.Contains(topic, "/service/reply")
 }

@@ -32,20 +32,21 @@ type DeviceInfo struct {
 
 // Broker 内嵌 Mochi MQTT 服务器
 type Broker struct {
-	server         *mochi.Server
-	config         config.MQTTConfig
-	deviceRepo     *repository.DeviceRepository
-	thingModelRepo *repository.ThingModelRepository
-	deviceDataRepo *repository.DeviceDataRepository
-	auditLogRepo   *repository.AuditLogRepository
-	alertRuleRepo  *repository.AlertRuleRepository
-	alertLogRepo   *repository.AlertLogRepository
-	otaTaskRepo    *repository.OTATaskRepository
-	firmwareRepo   *repository.FirmwareRepository
-	settingsRepo   *repository.SettingsRepository
-	rdb            *cache.Redis
-	hub            *ws.Hub
-	baseURL        string
+	server          *mochi.Server
+	config          config.MQTTConfig
+	deviceRepo      *repository.DeviceRepository
+	thingModelRepo  *repository.ThingModelRepository
+	deviceDataRepo  *repository.DeviceDataRepository
+	auditLogRepo    *repository.AuditLogRepository
+	alertRuleRepo   *repository.AlertRuleRepository
+	alertLogRepo    *repository.AlertLogRepository
+	otaTaskRepo     *repository.OTATaskRepository
+	firmwareRepo    *repository.FirmwareRepository
+	settingsRepo    *repository.SettingsRepository
+	svcCallLogRepo  *repository.ServiceCallLogRepository
+	rdb             *cache.Redis
+	hub             *ws.Hub
+	baseURL         string
 
 	// 已连接设备缓存: device_id → DeviceInfo
 	devices sync.Map
@@ -74,6 +75,7 @@ func NewBroker(
 	otaTaskRepo *repository.OTATaskRepository,
 	firmwareRepo *repository.FirmwareRepository,
 	settingsRepo *repository.SettingsRepository,
+	svcCallLogRepo *repository.ServiceCallLogRepository,
 	rdb *cache.Redis,
 	hub *ws.Hub,
 	baseURL string,
@@ -89,6 +91,7 @@ func NewBroker(
 		otaTaskRepo:    otaTaskRepo,
 		firmwareRepo:   firmwareRepo,
 		settingsRepo:   settingsRepo,
+		svcCallLogRepo: svcCallLogRepo,
 		rdb:            rdb,
 		hub:            hub,
 		baseURL:        baseURL,

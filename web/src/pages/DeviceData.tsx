@@ -1,9 +1,9 @@
 import { useEffect, useState, useMemo } from 'react';
 import { toast } from 'sonner';
-import { Activity, RefreshCw, Copy, Check, Mic, Blocks, Clock, Download } from 'lucide-react';
+import { Activity, RefreshCw, Copy, Check, Mic, Blocks, Clock, Download, Terminal } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import { deviceApi, thingModelApi } from '../api';
-import type { Device, ThingModel, DeviceLatestData, DeviceHistoryData, Property, AggregatedDataPoint } from '../api';
+import { deviceApi, thingModelApi, serviceCallLogApi } from '../api';
+import type { Device, ThingModel, DeviceLatestData, DeviceHistoryData, Property, AggregatedDataPoint, ServiceCallLog } from '../api';
 import { onWSMessage } from './Dashboard';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -29,6 +29,10 @@ export default function DeviceData() {
   const [historyRange, setHistoryRange] = useState('1h');
   const [historyLoading, setHistoryLoading] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [serviceLogs, setServiceLogs] = useState<ServiceCallLog[]>([]);
+  const [serviceLogsTotal, setServiceLogsTotal] = useState(0);
+  const [serviceLogsPage, setServiceLogsPage] = useState(1);
+  const [serviceLogsLoading, setServiceLogsLoading] = useState(false);
 
   useEffect(() => {
     fetchDevices();
@@ -135,6 +139,41 @@ export default function DeviceData() {
     }
   };
 
+  const fetchServiceLogs = async (page = 1) => {
+    if (!selectedId) return;
+    setServiceLogsLoading(true);
+    try {
+      const res = await serviceCallLogApi.list(page, 20, selectedId);
+      setServiceLogs(res.data.list || []);
+      setServiceLogsTotal(res.data.total);
+      setServiceLogsPage(page);
+    } catch { /* silent */ }
+    finally { setServiceLogsLoading(false); }
+  };
+
+  useEffect(() => {
+    if (selectedId) {
+      setServiceLogs([]);
+      setServiceLogsTotal(0);
+      setServiceLogsPage(1);
+    }
+  }, [selectedId]);
+
+  // 监听 WS service_reply 消息，实时更新列表
+  useEffect(() => {
+    const unsub = onWSMessage((msg) => {
+      if (msg.type === 'service_reply' && msg.data?.device_id === selectedId) {
+        // 更新已有记录的状态
+        setServiceLogs(prev => prev.map(log =>
+          log.request_id === msg.data.request_id
+            ? { ...log, status: msg.data.status, response_code: msg.data.code, output_params: msg.data.output, replied_at: new Date().toISOString(), error: msg.data.message && msg.data.status === 'failed' ? msg.data.message : log.error }
+            : log
+        ));
+      }
+    });
+    return unsub;
+  }, [selectedId]);
+
   const numericProps = useMemo(() =>
     (thingModel?.properties || []).filter(p => p.dataType === 'int' || p.dataType === 'float'),
     [thingModel]
@@ -230,7 +269,7 @@ export default function DeviceData() {
       )}
 
       {selectedId && !loading && selectedDevice && (
-        <Tabs defaultValue="properties">
+        <Tabs defaultValue="properties" onValueChange={(v) => { if (v === 'service-calls' && serviceLogs.length === 0 && !serviceLogsLoading) fetchServiceLogs(); }}>
           <TabsList>
             <TabsTrigger value="properties">属性数据</TabsTrigger>
             <TabsTrigger value="model">物模型详情</TabsTrigger>
@@ -238,6 +277,7 @@ export default function DeviceData() {
               <TabsTrigger value="modules">模块 ({thingModel.modules.length})</TabsTrigger>
             )}
             <TabsTrigger value="history">历史趋势</TabsTrigger>
+            <TabsTrigger value="service-calls">服务调用</TabsTrigger>
             <TabsTrigger value="api">接口详情</TabsTrigger>
           </TabsList>
 
@@ -842,6 +882,85 @@ export default function DeviceData() {
             </Card>
           </TabsContent>
 
+          {/* Tab: 服务调用历史 */}
+          <TabsContent value="service-calls">
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between">
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <Terminal className="h-4 w-4" />
+                  服务调用历史
+                </CardTitle>
+                <Button variant="outline" size="sm" onClick={() => fetchServiceLogs(serviceLogsPage)} disabled={serviceLogsLoading}>
+                  <RefreshCw className={`h-3.5 w-3.5 mr-1 ${serviceLogsLoading ? 'animate-spin' : ''}`} />
+                  刷新
+                </Button>
+              </CardHeader>
+              <CardContent>
+                {serviceLogsLoading && serviceLogs.length === 0 ? (
+                  <div className="flex justify-center py-10"><Spinner /></div>
+                ) : serviceLogs.length === 0 ? (
+                  <p className="text-center text-muted-foreground py-10">暂无服务调用记录</p>
+                ) : (
+                  <>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b text-left text-muted-foreground">
+                            <th className="py-2 pr-3">时间</th>
+                            <th className="py-2 pr-3">服务</th>
+                            <th className="py-2 pr-3">请求参数</th>
+                            <th className="py-2 pr-3">状态</th>
+                            <th className="py-2 pr-3">响应码</th>
+                            <th className="py-2 pr-3">输出参数</th>
+                            <th className="py-2">响应时间</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {serviceLogs.map(log => (
+                            <tr key={log.id} className="border-b last:border-0">
+                              <td className="py-2 pr-3 whitespace-nowrap text-xs">{new Date(log.created_at).toLocaleString()}</td>
+                              <td className="py-2 pr-3">
+                                <span className="font-medium">{log.service_name || log.service_id}</span>
+                                {log.service_name && log.service_name !== log.service_id && (
+                                  <span className="text-xs text-muted-foreground ml-1">({log.service_id})</span>
+                                )}
+                              </td>
+                              <td className="py-2 pr-3">
+                                <ServiceCallJsonCell data={log.input_params} />
+                              </td>
+                              <td className="py-2 pr-3">
+                                <ServiceCallStatusBadge status={log.status} />
+                              </td>
+                              <td className="py-2 pr-3 font-mono text-xs">
+                                {log.response_code != null ? log.response_code : '--'}
+                              </td>
+                              <td className="py-2 pr-3">
+                                {log.output_params ? <ServiceCallJsonCell data={log.output_params} /> : <span className="text-muted-foreground">--</span>}
+                              </td>
+                              <td className="py-2 text-xs whitespace-nowrap">
+                                {log.replied_at ? `${((new Date(log.replied_at).getTime() - new Date(log.created_at).getTime()) / 1000).toFixed(1)}s` : '--'}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    {/* 分页 */}
+                    {serviceLogsTotal > 20 && (
+                      <div className="flex items-center justify-between mt-4">
+                        <span className="text-xs text-muted-foreground">共 {serviceLogsTotal} 条</span>
+                        <div className="flex gap-2">
+                          <Button variant="outline" size="sm" disabled={serviceLogsPage <= 1} onClick={() => fetchServiceLogs(serviceLogsPage - 1)}>上一页</Button>
+                          <Button variant="outline" size="sm" disabled={serviceLogsPage * 20 >= serviceLogsTotal} onClick={() => fetchServiceLogs(serviceLogsPage + 1)}>下一页</Button>
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
           {/* Tab 3: 接口详情 */}
           <TabsContent value="api">
             <div className="space-y-4">
@@ -1051,4 +1170,32 @@ function sampleValueByType(dataType: string): unknown {
     case 'bool': return false;
     default: return '';
   }
+}
+
+function ServiceCallStatusBadge({ status }: { status: string }) {
+  const map: Record<string, { variant: 'default' | 'success' | 'destructive' | 'secondary'; label: string }> = {
+    pending: { variant: 'default', label: '等待中' },
+    success: { variant: 'success', label: '成功' },
+    failed: { variant: 'destructive', label: '失败' },
+    timeout: { variant: 'secondary', label: '超时' },
+  };
+  const cfg = map[status] || { variant: 'secondary' as const, label: status };
+  return <Badge variant={cfg.variant} className="text-xs">{cfg.label}</Badge>;
+}
+
+function ServiceCallJsonCell({ data }: { data: unknown }) {
+  const [expanded, setExpanded] = useState(false);
+  const text = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+  const short = typeof data === 'string' ? data : JSON.stringify(data);
+  if (!data || short === '{}' || short === 'null') return <span className="text-muted-foreground text-xs">--</span>;
+  return (
+    <div>
+      <button onClick={() => setExpanded(!expanded)} className="text-xs font-mono text-left hover:underline max-w-[200px] truncate block">
+        {expanded ? '收起' : short.length > 30 ? short.slice(0, 30) + '...' : short}
+      </button>
+      {expanded && (
+        <pre className="bg-muted rounded p-2 text-xs font-mono mt-1 max-h-40 overflow-auto whitespace-pre-wrap">{text}</pre>
+      )}
+    </div>
+  );
 }

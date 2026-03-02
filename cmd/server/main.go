@@ -102,9 +102,13 @@ func main() {
 	// 平台设置 Repository（Admin pool，无 RLS）
 	settingsRepo := repository.NewSettingsRepository(db.Admin())
 
+	// 服务调用日志 Repository
+	svcCallLogRepoAdmin := repository.NewServiceCallLogRepository(db.Admin())
+	svcCallLogRepoApp := repository.NewServiceCallLogRepository(db.App())
+
 	// 初始化 MQTT Broker
 	baseURL := "http://localhost:" + cfg.Server.Port
-	broker := mqttbroker.NewBroker(cfg.MQTT, mqttDeviceRepo, mqttThingModelRepo, deviceDataRepo, auditLogRepo, mqttAlertRuleRepo, mqttAlertLogRepo, mqttOTATaskRepo, mqttFirmwareRepo, settingsRepo, rdb, hub, baseURL)
+	broker := mqttbroker.NewBroker(cfg.MQTT, mqttDeviceRepo, mqttThingModelRepo, deviceDataRepo, auditLogRepo, mqttAlertRuleRepo, mqttAlertLogRepo, mqttOTATaskRepo, mqttFirmwareRepo, settingsRepo, svcCallLogRepoAdmin, rdb, hub, baseURL)
 	if err := broker.Start(); err != nil {
 		logger.Log.Fatalf("Failed to start MQTT broker: %v", err)
 	}
@@ -126,7 +130,8 @@ func main() {
 	alertLogHandler := handler.NewAlertLogHandler(alertLogRepoApp, db.App())
 	scheduledTaskHandler := handler.NewScheduledTaskHandler(scheduledTaskRepoApp, db.App())
 	stlHandler := handler.NewScheduledTaskLogHandler(stlRepoApp, db.App())
-	debugHandler := handler.NewDebugHandler(deviceRepo, thingModelRepo, deviceDataRepo, db.App(), rdb, broker)
+	debugHandler := handler.NewDebugHandler(deviceRepo, thingModelRepo, deviceDataRepo, svcCallLogRepoAdmin, db.App(), rdb, broker)
+	svcCallLogHandler := handler.NewServiceCallLogHandler(svcCallLogRepoApp, db.App())
 	firmwareHandler := handler.NewFirmwareHandler(firmwareRepoApp, mqttDeviceRepo, db.App())
 	otaTaskHandler := handler.NewOTATaskHandler(otaTaskRepoApp, firmwareRepoApp, deviceRepo, db.App(), broker, baseURL)
 	settingsHandler := handler.NewSettingsHandler(settingsRepo, broker)
@@ -234,6 +239,9 @@ func main() {
 
 			// 定时任务执行日志路由
 			protected.GET("/scheduled-task-logs", stlHandler.List)
+
+			// 服务调用日志路由
+			protected.GET("/service-call-logs", svcCallLogHandler.List)
 
 			// 审计日志路由（admin 查所有，普通用户查自己的）
 			protected.GET("/audit-logs", auditLogHandler.List)

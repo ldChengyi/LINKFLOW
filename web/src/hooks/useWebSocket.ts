@@ -1,7 +1,7 @@
 import { useEffect, useRef, useCallback } from 'react';
 
 export interface WSMessage {
-  type: 'telemetry' | 'device_status' | 'alert' | 'stats' | 'ota_progress';
+  type: 'telemetry' | 'device_status' | 'alert' | 'stats' | 'ota_progress' | 'service_reply';
   data: any;
 }
 

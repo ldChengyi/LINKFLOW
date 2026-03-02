@@ -24,13 +24,14 @@ type DebugHandler struct {
 	deviceRepo     *repository.DeviceRepository
 	thingModelRepo *repository.ThingModelRepository
 	dataRepo       *repository.DeviceDataRepository
+	svcCallLogRepo *repository.ServiceCallLogRepository
 	pool           *pgxpool.Pool
 	rdb            *cache.Redis
 	publisher      MQTTPublisher
 }
 
-func NewDebugHandler(deviceRepo *repository.DeviceRepository, thingModelRepo *repository.ThingModelRepository, dataRepo *repository.DeviceDataRepository, pool *pgxpool.Pool, rdb *cache.Redis, publisher MQTTPublisher) *DebugHandler {
-	return &DebugHandler{deviceRepo: deviceRepo, thingModelRepo: thingModelRepo, dataRepo: dataRepo, pool: pool, rdb: rdb, publisher: publisher}
+func NewDebugHandler(deviceRepo *repository.DeviceRepository, thingModelRepo *repository.ThingModelRepository, dataRepo *repository.DeviceDataRepository, svcCallLogRepo *repository.ServiceCallLogRepository, pool *pgxpool.Pool, rdb *cache.Redis, publisher MQTTPublisher) *DebugHandler {
+	return &DebugHandler{deviceRepo: deviceRepo, thingModelRepo: thingModelRepo, dataRepo: dataRepo, svcCallLogRepo: svcCallLogRepo, pool: pool, rdb: rdb, publisher: publisher}
 }
 
 type DebugRequest struct {
@@ -120,12 +121,40 @@ func (h *DebugHandler) Debug(c *gin.Context) {
 		payload, _ = json.Marshal(data)
 	case "service_invoke":
 		topic = fmt.Sprintf("devices/%s/service/invoke", deviceID)
+		requestID := fmt.Sprintf("debug_%s_%d", deviceID[:8], time.Now().Unix())
 		msg := map[string]interface{}{
-			"id":      fmt.Sprintf("debug_%s_%d", deviceID[:8], time.Now().Unix()),
+			"id":      requestID,
 			"service": req.ServiceID,
 			"params":  req.Value,
 		}
 		payload, _ = json.Marshal(msg)
+
+		// 写入服务调用日志（status=pending）
+		if h.svcCallLogRepo != nil {
+			serviceName := req.ServiceID
+			if device.ModelID != nil && *device.ModelID != "" {
+				if tm, err := h.thingModelRepo.GetByID(ctx, *device.ModelID); err == nil {
+					for _, s := range tm.Services {
+						if s.ID == req.ServiceID {
+							serviceName = s.Name
+							break
+						}
+					}
+				}
+			}
+			inputJSON, _ := json.Marshal(req.Value)
+			userID := c.GetString("user_id")
+			h.svcCallLogRepo.Create(context.Background(), &model.ServiceCallLog{
+				DeviceID:    deviceID,
+				UserID:      userID,
+				DeviceName:  device.Name,
+				ServiceID:   req.ServiceID,
+				ServiceName: serviceName,
+				RequestID:   requestID,
+				InputParams: inputJSON,
+				Status:      "pending",
+			})
+		}
 	}
 
 	if err := h.publisher.Publish(topic, payload, false, 1); err != nil {
@@ -160,9 +189,16 @@ func (h *DebugHandler) Debug(c *gin.Context) {
 			}
 			h.publisher.Publish(upTopic, echoPayload, false, 1)
 		case "service_invoke":
+			// 解析 payload 获取 requestID（用于模拟回复中的 id 字段一致性）
+			var invokeMsg map[string]interface{}
+			json.Unmarshal(payload, &invokeMsg)
+			replyID, _ := invokeMsg["id"].(string)
+			if replyID == "" {
+				replyID = fmt.Sprintf("debug_%s_%d", deviceID[:8], time.Now().Unix())
+			}
 			replyTopic := fmt.Sprintf("devices/%s/service/reply", deviceID)
 			reply := map[string]interface{}{
-				"id":      fmt.Sprintf("debug_%s_%d", deviceID[:8], time.Now().Unix()),
+				"id":      replyID,
 				"service": req.ServiceID,
 				"code":    200,
 				"message": "success",
