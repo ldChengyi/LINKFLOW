@@ -1,6 +1,0 @@
-{
-  "broker_host": "localhost",
-  "broker_port": 1883,
-  "device_id": "从平台复制设备ID",
-  "device_secret": "从平台复制设备密钥"
-}

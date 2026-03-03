@@ -391,9 +391,11 @@ void handleServiceInvoke(JsonDocument &doc)
         char payload[256];
         serializeJson(reply, payload, sizeof(payload));
         mqtt.publish(topicServiceReply.c_str(), payload);
+        mqtt.loop(); // 确保 reply 发出
         Serial.println(F("[CMD] Rebooting..."));
 
-        delay(1000);
+        mqtt.disconnect(); // 发送 DISCONNECT 包，让 broker 正确处理下线
+        delay(500);
         ESP.restart();
     }
     else if (strcmp(service, "get_info") == 0)
@@ -556,7 +558,8 @@ void performOTA(const char *url, const char *checksum, const char *taskId, const
         {
             Serial.println(F("[OTA] Success! Rebooting..."));
             reportOtaProgress("completed", 100, "", version);
-            delay(1000);
+            mqtt.disconnect(); // 发送 DISCONNECT 包，让 broker 正确处理下线
+            delay(500);
             ESP.restart();
         }
         else
