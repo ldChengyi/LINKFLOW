@@ -1,4 +1,6 @@
-# LinkFlow IoT Platform
+# LinkFlow — 轻量级物联网云平台 | Lightweight IoT Platform
+
+基于 Go + React 的开源物联网（IoT）平台，支持 MQTT 设备接入、实时数据监控、告警、定时任务、语音控制、OTA 升级。
 
 [English](#english) | [中文](#中文)
 
@@ -6,9 +8,9 @@
 
 <a id="中文"></a>
 
-LinkFlow 是一个基于 Go 的**轻量级物联网（IoT）云平台**，适合作为学习项目或中小型 IoT 场景的起点。它可以接入模拟/真实 IoT 设备，采集传感器数据，并提供实时监控、告警、语音控制、OTA 升级等功能。
+LinkFlow 是一个基于 Go 的**轻量级物联网云平台**，适合作为学习项目或中小型 IoT 场景的起点。它可以接入模拟/真实 IoT 设备，采集传感器数据，并提供实时监控、告警、语音控制、OTA 升级等功能。
 
-> 本项目最初是一个毕业设计，现已开源。欢迎 Star、Fork、提 Issue 或 PR。
+> 本项目最初是一个毕业设计，现已开源。Docker 一键部署，开箱即用。欢迎 Star、Fork、提 Issue 或 PR。
 
 ## 功能一览
 
