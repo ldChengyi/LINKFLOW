@@ -176,7 +176,7 @@ export default function AuditLogList() {
                   const resourceName = getResourceName(item);
                   return (
                     <TableRow key={item.id}>
-                      <TableCell>
+                      <TableCell className="whitespace-nowrap">
                         <Badge variant={categoryVariant(item.category)}>
                           {categoryLabel(item.category)}
                         </Badge>

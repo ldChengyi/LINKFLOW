@@ -106,6 +106,9 @@ func main() {
 	svcCallLogRepoAdmin := repository.NewServiceCallLogRepository(db.Admin())
 	svcCallLogRepoApp := repository.NewServiceCallLogRepository(db.App())
 
+	// 调试日志 Repository
+	debugLogRepo := repository.NewDebugLogRepository(db.App())
+
 	// 初始化 MQTT Broker
 	baseURL := "http://localhost:" + cfg.Server.Port
 	broker := mqttbroker.NewBroker(cfg.MQTT, mqttDeviceRepo, mqttThingModelRepo, deviceDataRepo, auditLogRepo, mqttAlertRuleRepo, mqttAlertLogRepo, mqttOTATaskRepo, mqttFirmwareRepo, settingsRepo, svcCallLogRepoAdmin, rdb, hub, baseURL)
@@ -130,7 +133,7 @@ func main() {
 	alertLogHandler := handler.NewAlertLogHandler(alertLogRepoApp, db.App())
 	scheduledTaskHandler := handler.NewScheduledTaskHandler(scheduledTaskRepoApp, db.App())
 	stlHandler := handler.NewScheduledTaskLogHandler(stlRepoApp, db.App())
-	debugHandler := handler.NewDebugHandler(deviceRepo, thingModelRepo, deviceDataRepo, svcCallLogRepoAdmin, db.App(), rdb, broker)
+	debugHandler := handler.NewDebugHandler(deviceRepo, thingModelRepo, deviceDataRepo, svcCallLogRepoAdmin, debugLogRepo, db.App(), rdb, broker)
 	svcCallLogHandler := handler.NewServiceCallLogHandler(svcCallLogRepoApp, db.App())
 	firmwareHandler := handler.NewFirmwareHandler(firmwareRepoApp, mqttDeviceRepo, db.App())
 	otaTaskHandler := handler.NewOTATaskHandler(otaTaskRepoApp, firmwareRepoApp, deviceRepo, db.App(), broker, baseURL)
@@ -200,6 +203,7 @@ func main() {
 				devices.POST("/:id/simulate/online", debugHandler.SimulateOnline)
 				devices.POST("/:id/simulate/offline", debugHandler.SimulateOffline)
 				devices.POST("/:id/simulate/heartbeat", debugHandler.SimulateHeartbeat)
+				devices.GET("/:id/debug-logs", debugHandler.ListDebugLogs)
 			}
 
 			// 统计路由

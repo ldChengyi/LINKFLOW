@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -25,13 +26,14 @@ type DebugHandler struct {
 	thingModelRepo *repository.ThingModelRepository
 	dataRepo       *repository.DeviceDataRepository
 	svcCallLogRepo *repository.ServiceCallLogRepository
+	debugLogRepo   *repository.DebugLogRepository
 	pool           *pgxpool.Pool
 	rdb            *cache.Redis
 	publisher      MQTTPublisher
 }
 
-func NewDebugHandler(deviceRepo *repository.DeviceRepository, thingModelRepo *repository.ThingModelRepository, dataRepo *repository.DeviceDataRepository, svcCallLogRepo *repository.ServiceCallLogRepository, pool *pgxpool.Pool, rdb *cache.Redis, publisher MQTTPublisher) *DebugHandler {
-	return &DebugHandler{deviceRepo: deviceRepo, thingModelRepo: thingModelRepo, dataRepo: dataRepo, svcCallLogRepo: svcCallLogRepo, pool: pool, rdb: rdb, publisher: publisher}
+func NewDebugHandler(deviceRepo *repository.DeviceRepository, thingModelRepo *repository.ThingModelRepository, dataRepo *repository.DeviceDataRepository, svcCallLogRepo *repository.ServiceCallLogRepository, debugLogRepo *repository.DebugLogRepository, pool *pgxpool.Pool, rdb *cache.Redis, publisher MQTTPublisher) *DebugHandler {
+	return &DebugHandler{deviceRepo: deviceRepo, thingModelRepo: thingModelRepo, dataRepo: dataRepo, svcCallLogRepo: svcCallLogRepo, debugLogRepo: debugLogRepo, pool: pool, rdb: rdb, publisher: publisher}
 }
 
 type DebugRequest struct {
@@ -157,13 +159,52 @@ func (h *DebugHandler) Debug(c *gin.Context) {
 		}
 	}
 
+	// 判断连接类型
+	realConn := h.publisher.IsClientConnected(deviceID)
+	connType := "simulated"
+	if realConn {
+		connType = "real"
+	}
+
+	// 记录调试日志
+	userID := c.GetString("user_id")
+	debugLog := &model.DebugLog{
+		UserID:         userID,
+		DeviceID:       deviceID,
+		DeviceName:     device.Name,
+		ConnectionType: connType,
+		ActionType:     req.ActionType,
+		Request:        make(map[string]interface{}),
+		Success:        true,
+	}
+	if req.ActionType == "property_set" {
+		if len(req.Properties) > 0 {
+			debugLog.Request["properties"] = req.Properties
+		} else {
+			debugLog.Request["property_id"] = req.PropertyID
+			debugLog.Request["value"] = req.Value
+		}
+	} else {
+		debugLog.Request["service_id"] = req.ServiceID
+		debugLog.Request["params"] = req.Value
+	}
+
 	if err := h.publisher.Publish(topic, payload, false, 1); err != nil {
+		debugLog.Success = false
+		debugLog.ErrorMessage = "failed to publish MQTT message"
+		if h.debugLogRepo != nil {
+			h.debugLogRepo.Create(context.Background(), debugLog)
+		}
 		Fail(c, http.StatusInternalServerError, "failed to publish MQTT message")
 		return
 	}
 
+	debugLog.Response = map[string]interface{}{"topic": topic, "published": true}
+	if h.debugLogRepo != nil {
+		h.debugLogRepo.Create(context.Background(), debugLog)
+	}
+
 	// 仅模拟设备需要自动回传（真实设备由硬件自行回传）
-	realConn := h.publisher.IsClientConnected(deviceID)
 	if !realConn {
 		switch req.ActionType {
 		case "property_set":
@@ -333,4 +374,36 @@ func (h *DebugHandler) ConnectionType(c *gin.Context) {
 	}
 
 	Success(c, gin.H{"device_id": deviceID, "connection_type": "offline"})
+}
+
+// ListDebugLogs 查询设备调试历史
+func (h *DebugHandler) ListDebugLogs(c *gin.Context) {
+	deviceID := c.Param("id")
+	page := 1
+	pageSize := 20
+	if p := c.Query("page"); p != "" {
+		if v, err := strconv.Atoi(p); err == nil && v > 0 {
+			page = v
+		}
+	}
+	if ps := c.Query("page_size"); ps != "" {
+		if v, err := strconv.Atoi(ps); err == nil && v > 0 && v <= 100 {
+			pageSize = v
+		}
+	}
+
+	ctx, err := h.withRLS(c)
+	if err != nil {
+		Fail(c, http.StatusInternalServerError, "database error")
+		return
+	}
+	defer database.ReleaseRLSConn(ctx)
+
+	logs, total, err := h.debugLogRepo.List(ctx, deviceID, page, pageSize)
+	if err != nil {
+		Fail(c, http.StatusInternalServerError, "failed to query debug logs")
+		return
+	}
+
+	Success(c, gin.H{"list": logs, "total": total, "page": page, "page_size": pageSize})
 }

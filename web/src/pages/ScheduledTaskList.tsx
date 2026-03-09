@@ -156,14 +156,14 @@ export default function ScheduledTaskList() {
                 ))}
               </tbody>
             </table>
+
+            <DataPagination
+              page={page} pageSize={pageSize} total={total}
+              onPageChange={setPage}
+              onPageSizeChange={(s) => setPageSize(s)}
+            />
           </div>
         )}
-
-        <DataPagination
-          page={page} pageSize={pageSize} total={total}
-          onPageChange={setPage}
-          onPageSizeChange={(s) => setPageSize(s)}
-        />
       </div>
 
       <Dialog open={!!deleteId} onOpenChange={(open: boolean) => !open && setDeleteId(null)}>

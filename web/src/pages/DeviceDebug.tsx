@@ -1,8 +1,8 @@
 import { useEffect, useState, useRef } from 'react';
 import { toast } from 'sonner';
-import { Terminal, Send, Power, Wifi, Radio } from 'lucide-react';
+import { Terminal, Send, Power, Wifi, Radio, History, RefreshCw } from 'lucide-react';
 import { deviceApi, thingModelApi } from '../api';
-import type { Device, ThingModel, Property, Service, DeviceLatestData } from '../api';
+import type { Device, ThingModel, Property, Service, DeviceLatestData, DebugLog } from '../api';
 import { onWSMessage } from './Dashboard';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -10,6 +10,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { Spinner } from '@/components/ui/spinner';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { DataPagination } from '@/components/ui/data-pagination';
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
@@ -28,6 +30,11 @@ export default function DeviceDebug() {
   const [sending, setSending] = useState<string | null>(null);
   const [simulating, setSimulating] = useState(false);
   const [connType, setConnType] = useState<ConnectionType>('offline');
+  const [debugLogs, setDebugLogs] = useState<DebugLog[]>([]);
+  const [loadingLogs, setLoadingLogs] = useState(false);
+  const [logsTotal, setLogsTotal] = useState(0);
+  const [logsPage, setLogsPage] = useState(1);
+  const [logsPageSize, setLogsPageSize] = useState(20);
   const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // 模拟上线心跳：每 2 分钟续期，停止时清理
@@ -97,6 +104,8 @@ export default function DeviceDebug() {
     setPropValues({});
     setSvcParams({});
     setConnType('offline');
+    setDebugLogs([]);
+    setLogsPage(1);
     try {
       const [devRes, dataRes, connRes] = await Promise.all([
         deviceApi.get(id),
@@ -112,9 +121,24 @@ export default function DeviceDebug() {
           setThingModel(mRes.data);
         } catch { /* silent */ }
       }
+      fetchDebugLogs(id);
     } catch { toast.error('获取设备信息失败'); }
     finally { setLoading(false); }
   };
+
+  const fetchDebugLogs = async (id: string) => {
+    setLoadingLogs(true);
+    try {
+      const res = await deviceApi.debugLogs(id, logsPage, logsPageSize);
+      setDebugLogs(res.data.list || []);
+      setLogsTotal(res.data.total);
+    } catch { /* silent */ }
+    finally { setLoadingLogs(false); }
+  };
+
+  useEffect(() => {
+    if (selectedId) fetchDebugLogs(selectedId);
+  }, [logsPage, logsPageSize]);
 
   const rwProps = thingModel?.properties?.filter((p) => p.accessMode === 'rw') || [];
   const services = thingModel?.services || [];
@@ -142,6 +166,7 @@ export default function DeviceDebug() {
       }
       await deviceApi.debug(selectedId, { action_type: 'property_set', properties });
       toast.success('属性下发成功');
+      fetchDebugLogs(selectedId);
     } catch (e: unknown) {
       const msg = (e as { response?: { data?: { msg?: string } } })?.response?.data?.msg || '下发失败';
       toast.error(msg);
@@ -157,6 +182,7 @@ export default function DeviceDebug() {
       }
       await deviceApi.debug(selectedId, { action_type: 'service_invoke', service_id: svc.id, value: params });
       toast.success(`${svc.name} 调用成功`);
+      fetchDebugLogs(selectedId);
     } catch (e: unknown) {
       const msg = (e as { response?: { data?: { msg?: string } } })?.response?.data?.msg || '调用失败';
       toast.error(msg);
@@ -295,7 +321,13 @@ export default function DeviceDebug() {
       )}
 
       {selectedDevice && !loading && isOnline && thingModel && (
-        <>
+        <Tabs defaultValue="properties" className="space-y-4">
+          <TabsList>
+            <TabsTrigger value="properties">属性设置</TabsTrigger>
+            <TabsTrigger value="services">服务调用</TabsTrigger>
+            <TabsTrigger value="history">调试历史</TabsTrigger>
+          </TabsList>
+
           {isReal && (
             <Card>
               <CardContent className="py-3 text-sm text-muted-foreground flex items-center gap-2">
@@ -305,71 +337,142 @@ export default function DeviceDebug() {
             </Card>
           )}
 
-          {/* Property Set */}
-          {rwProps.length > 0 && (
-            <Card>
-              <CardHeader><CardTitle className="text-base">属性设置</CardTitle></CardHeader>
-              <CardContent className="space-y-3">
-                {rwProps.map((prop) => (
-                  <div key={prop.id} className="flex items-center justify-between py-2 border-b border-border last:border-0">
-                    <div className="flex items-center gap-2 min-w-[120px]">
-                      <span className="font-medium text-sm">{prop.name}</span>
-                      <Badge variant="outline" className="text-xs">{prop.dataType}</Badge>
+          <TabsContent value="properties" className="space-y-4">
+            {rwProps.length > 0 ? (
+              <Card>
+                <CardHeader><CardTitle className="text-base">属性设置</CardTitle></CardHeader>
+                <CardContent className="space-y-3">
+                  {rwProps.map((prop) => (
+                    <div key={prop.id} className="flex items-center justify-between py-2 border-b border-border last:border-0">
+                      <div className="flex items-center gap-2 min-w-[120px]">
+                        <span className="font-medium text-sm">{prop.name}</span>
+                        <Badge variant="outline" className="text-xs">{prop.dataType}</Badge>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        {renderPropInput(prop)}
+                      </div>
                     </div>
-                    <div className="flex items-center gap-3">
-                      {renderPropInput(prop)}
-                    </div>
+                  ))}
+                  <div className="pt-2 flex justify-end">
+                    <Button onClick={handleAllPropertySet} disabled={sending === '__all__'}>
+                      {sending === '__all__' ? <Spinner className="h-4 w-4 mr-2" /> : <Send className="h-4 w-4 mr-2" />}
+                      下发
+                    </Button>
                   </div>
-                ))}
-                <div className="pt-2 flex justify-end">
-                  <Button onClick={handleAllPropertySet} disabled={sending === '__all__'}>
-                    {sending === '__all__' ? <Spinner className="h-4 w-4 mr-2" /> : <Send className="h-4 w-4 mr-2" />}
-                    下发
-                  </Button>
-                </div>
+                </CardContent>
+              </Card>
+            ) : (
+              <Card><CardContent className="py-8 text-center text-muted-foreground">该物模型没有可写属性</CardContent></Card>
+            )}
+          </TabsContent>
+
+          <TabsContent value="services" className="space-y-4">
+            {services.length > 0 ? (
+              <Card>
+                <CardHeader><CardTitle className="text-base">服务调用</CardTitle></CardHeader>
+                <CardContent className="space-y-3">
+                  {services.map((svc) => (
+                    <div key={svc.id} className="flex items-center justify-between py-2 border-b border-border last:border-0">
+                      <div className="min-w-[120px]">
+                        <span className="font-medium text-sm">{svc.name}</span>
+                        {svc.inputParams && svc.inputParams.length > 0 && (
+                          <span className="text-xs text-muted-foreground ml-2">
+                            参数: {svc.inputParams.map((p) => p.id).join(', ')}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-3">
+                        {svc.inputParams && svc.inputParams.length > 0 && (
+                          <Input
+                            className="w-48 h-8 font-mono text-xs"
+                            placeholder='{"key": "value"}'
+                            value={svcParams[svc.id] || ''}
+                            onChange={(e) => setSvcParams((p) => ({ ...p, [svc.id]: e.target.value }))}
+                          />
+                        )}
+                        <Button size="sm" onClick={() => handleServiceInvoke(svc)} disabled={sending === svc.id}>
+                          {sending === svc.id ? <Spinner className="h-4 w-4" /> : <Send className="h-4 w-4" />}
+                          <span className="ml-1">调用</span>
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+            ) : (
+              <Card><CardContent className="py-8 text-center text-muted-foreground">该物模型没有可调用服务</CardContent></Card>
+            )}
+          </TabsContent>
+
+          <TabsContent value="history" className="space-y-4">
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <History className="h-4 w-4" />
+                  调试历史
+                </CardTitle>
+                <Button size="sm" variant="outline" onClick={() => fetchDebugLogs(selectedId)} disabled={loadingLogs}>
+                  <RefreshCw className={`h-4 w-4 ${loadingLogs ? 'animate-spin' : ''}`} />
+                </Button>
+              </CardHeader>
+              <CardContent>
+                {loadingLogs ? (
+                  <div className="flex justify-center py-8"><Spinner /></div>
+                ) : debugLogs.length === 0 ? (
+                  <div className="py-8 text-center text-muted-foreground text-sm">暂无调试记录</div>
+                ) : (
+                  <div className="space-y-2 max-h-96 overflow-y-auto">
+                    {debugLogs.map((log) => (
+                      <div key={log.id} className="border rounded-lg p-3 text-sm space-y-2">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <Badge variant={log.connection_type === 'real' ? 'default' : 'secondary'} className="gap-1">
+                              {log.connection_type === 'real' ? <Wifi className="h-3 w-3" /> : <Radio className="h-3 w-3" />}
+                              {log.connection_type === 'real' ? 'MQTT' : '模拟'}
+                            </Badge>
+                            <Badge variant={log.action_type === 'property_set' ? 'outline' : 'secondary'}>
+                              {log.action_type === 'property_set' ? '属性设置' : '服务调用'}
+                            </Badge>
+                            <Badge variant={log.success ? 'default' : 'destructive'}>
+                              {log.success ? '成功' : '失败'}
+                            </Badge>
+                          </div>
+                          <span className="text-xs text-muted-foreground">
+                            {new Date(log.created_at).toLocaleString('zh-CN')}
+                          </span>
+                        </div>
+                        <div className="text-xs space-y-1">
+                          <div className="font-mono bg-muted p-2 rounded">
+                            <span className="text-muted-foreground">请求: </span>
+                            {JSON.stringify(log.request)}
+                          </div>
+                          {log.response && (
+                            <div className="font-mono bg-muted p-2 rounded">
+                              <span className="text-muted-foreground">响应: </span>
+                              {JSON.stringify(log.response)}
+                            </div>
+                          )}
+                          {log.error_message && (
+                            <div className="text-destructive">{log.error_message}</div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {logsTotal > 0 && (
+                  <DataPagination
+                    page={logsPage}
+                    pageSize={logsPageSize}
+                    total={logsTotal}
+                    onPageChange={setLogsPage}
+                    onPageSizeChange={setLogsPageSize}
+                  />
+                )}
               </CardContent>
             </Card>
-          )}
-
-          {/* Service Invoke */}
-          {services.length > 0 && (
-            <Card>
-              <CardHeader><CardTitle className="text-base">服务调用</CardTitle></CardHeader>
-              <CardContent className="space-y-3">
-                {services.map((svc) => (
-                  <div key={svc.id} className="flex items-center justify-between py-2 border-b border-border last:border-0">
-                    <div className="min-w-[120px]">
-                      <span className="font-medium text-sm">{svc.name}</span>
-                      {svc.inputParams && svc.inputParams.length > 0 && (
-                        <span className="text-xs text-muted-foreground ml-2">
-                          参数: {svc.inputParams.map((p) => p.id).join(', ')}
-                        </span>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-3">
-                      {svc.inputParams && svc.inputParams.length > 0 && (
-                        <Input
-                          className="w-48 h-8 font-mono text-xs"
-                          placeholder='{"key": "value"}'
-                          value={svcParams[svc.id] || ''}
-                          onChange={(e) => setSvcParams((p) => ({ ...p, [svc.id]: e.target.value }))}
-                        />
-                      )}
-                      <Button size="sm" onClick={() => handleServiceInvoke(svc)} disabled={sending === svc.id}>
-                        {sending === svc.id ? <Spinner className="h-4 w-4" /> : <Send className="h-4 w-4" />}
-                        <span className="ml-1">调用</span>
-                      </Button>
-                    </div>
-                  </div>
-                ))}
-              </CardContent>
-            </Card>
-          )}
-
-          {rwProps.length === 0 && services.length === 0 && (
-            <Card><CardContent className="py-8 text-center text-muted-foreground">该物模型没有可写属性或服务</CardContent></Card>
-          )}
-        </>
+          </TabsContent>
+        </Tabs>
       )}
     </div>
   );

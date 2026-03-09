@@ -169,6 +169,20 @@ export interface DeviceRequest {
   metadata?: Record<string, unknown>;
 }
 
+export interface DebugLog {
+  id: number;
+  user_id: string;
+  device_id: string;
+  device_name: string;
+  connection_type: 'real' | 'simulated';
+  action_type: 'property_set' | 'service_invoke';
+  request: Record<string, unknown>;
+  response?: Record<string, unknown>;
+  success: boolean;
+  error_message?: string;
+  created_at: string;
+}
+
 export interface DeviceLatestData {
   time: string;
   payload: Record<string, unknown>;
@@ -213,6 +227,8 @@ export const deviceApi = {
   simulateOnline: (id: string) => api.post(`/devices/${id}/simulate/online`),
   simulateOffline: (id: string) => api.post(`/devices/${id}/simulate/offline`),
   simulateHeartbeat: (id: string) => api.post(`/devices/${id}/simulate/heartbeat`),
+  debugLogs: (id: string, page = 1, pageSize = 20) =>
+    api.get<{ list: DebugLog[]; total: number; page: number; page_size: number }>(`/devices/${id}/debug-logs`, { params: { page, page_size: pageSize } }),
 };
 
 // 统计相关类型

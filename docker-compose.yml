@@ -47,6 +47,8 @@ services:
       DB_ADMIN_PASSWORD: ${DB_ADMIN_PASSWORD:-linkflow_admin}
       DB_APP_PASSWORD: ${DB_APP_PASSWORD:-linkflow_app}
       DB_READ_PASSWORD: ${DB_READ_PASSWORD:-linkflow_read}
+    ports:
+      - "${DB_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./scripts/init-db.sh:/docker-entrypoint-initdb.d/01-init-db.sh:ro
