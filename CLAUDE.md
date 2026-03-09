@@ -105,6 +105,7 @@ linkflow/
 │   │   ├── module.go               # 功能模块模型 + 语音指令结构
 │   │   ├── alert.go                # 告警规则 + 告警日志模型
 │   │   ├── scheduled_task.go       # 定时任务模型
+│   │   ├── debug_log.go            # 设备调试日志模型
 │   │   └── ota.go                  # 固件 + OTA任务模型
 │   ├── repository/
 │   │   ├── user.go                 # 用户数据访问
@@ -115,6 +116,7 @@ linkflow/
 │   │   ├── alert_rule.go           # 告警规则数据访问
 │   │   ├── alert_log.go            # 告警日志数据访问
 │   │   ├── scheduled_task.go       # 定时任务数据访问
+│   │   ├── debug_log.go            # 设备调试日志数据访问
 │   │   ├── firmware.go             # 固件数据访问
 │   │   └── ota_task.go             # OTA任务数据访问
 │   ├── service/
@@ -134,7 +136,8 @@ linkflow/
 │   ├── 008_scheduled_tasks.sql     # 定时任务表 + RLS
 │   ├── 009_alert_enhancements.sql  # 告警冷却字段 + 告警确认字段
 │   ├── 010_ota_system.sql          # 固件表 + OTA任务表 + RLS + 设备firmware_version字段
-│   └── 011_platform_settings.sql  # 平台全局设置表（key-value）
+│   ├── 011_platform_settings.sql  # 平台全局设置表（key-value）
+│   └── 012_debug_logs.sql         # 设备调试日志表 + RLS
 ├── web/                             # 前端项目
 │   ├── src/
 │   │   ├── api/index.ts            # Axios API 客户端
@@ -378,6 +381,13 @@ linkflow/
     - 前端：新增 30d 时间范围选项；聚合模式每属性渲染 3 条 Line（均值实线 + 上/下边界虚线）；底部显示聚合粒度文字
     - 关键文件：`internal/repository/device_data.go`（`GetDataHistoryAggregated`）、`internal/handler/device.go`（`History`）、`web/src/pages/DeviceData.tsx`
 
+28. **设备调试日志**
+    - 记录所有设备调试操作（属性设置/服务调用）到 `debug_logs` 表
+    - 记录内容：连接类型（real/simulated）、操作类型、请求参数、响应结果、成功状态、错误信息
+    - 后端 API：`GET /api/devices/:id/debug-logs?limit=&offset=`，支持分页查询
+    - RLS 行级安全：用户只能查看自己的调试日志
+    - 前端：DeviceDebug 页面展示调试历史记录
+
 ------
 
 ## API 端点
@@ -424,6 +434,7 @@ linkflow/
 | POST   | /api/devices/:id/simulate/online | 模拟设备上线       | 是   |
 | POST   | /api/devices/:id/simulate/offline | 模拟设备下线      | 是   |
 | POST   | /api/devices/:id/simulate/heartbeat | 模拟上线心跳续期 | 是   |
+| GET    | /api/devices/:id/debug-logs | 设备调试日志列表（?limit&offset） | 是   |
 | POST   | /api/firmwares              | 上传固件（multipart）| 是   |
 | GET    | /api/firmwares              | 固件列表           | 是   |
 | DELETE | /api/firmwares/:id          | 删除固件           | 是   |
