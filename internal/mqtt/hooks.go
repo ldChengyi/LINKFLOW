@@ -125,8 +125,7 @@ func (h *EventHook) OnPublished(cl *mochi.Client, pk packets.Packet) {
 
 	// 语音指令走单独的处理链
 	if strings.Contains(topic, "/voice/up") {
-		voiceHandler := NewVoiceHandler(h.broker)
-		go voiceHandler.HandleVoiceCommand(deviceID, pk.Payload)
+		go h.broker.voiceHandler.HandleVoiceCommand(deviceID, pk.Payload)
 		return
 	}
 

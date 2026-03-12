@@ -175,7 +175,7 @@ export interface DebugLog {
   device_id: string;
   device_name: string;
   connection_type: 'real' | 'simulated';
-  action_type: 'property_set' | 'service_invoke';
+  action_type: 'property_set' | 'service_invoke' | 'voice_command';
   request: Record<string, unknown>;
   response?: Record<string, unknown>;
   success: boolean;
@@ -229,6 +229,8 @@ export const deviceApi = {
   simulateHeartbeat: (id: string) => api.post(`/devices/${id}/simulate/heartbeat`),
   debugLogs: (id: string, page = 1, pageSize = 20) =>
     api.get<{ list: DebugLog[]; total: number; page: number; page_size: number }>(`/devices/${id}/debug-logs`, { params: { page, page_size: pageSize } }),
+  voiceDebug: (id: string, text: string) =>
+    api.post(`/devices/${id}/voice-debug`, { text }),
 };
 
 // 统计相关类型

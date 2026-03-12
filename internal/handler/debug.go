@@ -21,6 +21,10 @@ type MQTTPublisher interface {
 	IsClientConnected(clientID string) bool
 }
 
+type VoiceProcessor interface {
+	ProcessCommand(deviceID, text string) *model.VoiceResult
+}
+
 type DebugHandler struct {
 	deviceRepo     *repository.DeviceRepository
 	thingModelRepo *repository.ThingModelRepository
@@ -30,10 +34,16 @@ type DebugHandler struct {
 	pool           *pgxpool.Pool
 	rdb            *cache.Redis
 	publisher      MQTTPublisher
+	voiceProcessor VoiceProcessor
 }
 
 func NewDebugHandler(deviceRepo *repository.DeviceRepository, thingModelRepo *repository.ThingModelRepository, dataRepo *repository.DeviceDataRepository, svcCallLogRepo *repository.ServiceCallLogRepository, debugLogRepo *repository.DebugLogRepository, pool *pgxpool.Pool, rdb *cache.Redis, publisher MQTTPublisher) *DebugHandler {
 	return &DebugHandler{deviceRepo: deviceRepo, thingModelRepo: thingModelRepo, dataRepo: dataRepo, svcCallLogRepo: svcCallLogRepo, debugLogRepo: debugLogRepo, pool: pool, rdb: rdb, publisher: publisher}
+}
+
+// SetVoiceProcessor 设置语音处理器（在 broker 初始化后调用）
+func (h *DebugHandler) SetVoiceProcessor(vp VoiceProcessor) {
+	h.voiceProcessor = vp
 }
 
 type DebugRequest struct {
@@ -51,6 +61,101 @@ func (h *DebugHandler) withRLS(c *gin.Context) (context.Context, error) {
 		userRole = string(role.(model.UserRole))
 	}
 	return database.WithRLS(c.Request.Context(), h.pool, userID, userRole)
+}
+
+// VoiceDebug 语音指令调试（同步调用语音处理链路，直接返回结果）
+func (h *DebugHandler) VoiceDebug(c *gin.Context) {
+	var req struct {
+		Text string `json:"text" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		Fail(c, http.StatusBadRequest, "text is required")
+		return
+	}
+
+	if h.voiceProcessor == nil {
+		Fail(c, http.StatusInternalServerError, "voice processor not initialized")
+		return
+	}
+
+	ctx, err := h.withRLS(c)
+	if err != nil {
+		Fail(c, http.StatusInternalServerError, "database error")
+		return
+	}
+	defer database.ReleaseRLSConn(ctx)
+
+	deviceID := c.Param("id")
+	device, err := h.deviceRepo.GetByID(ctx, deviceID)
+	if err != nil {
+		Fail(c, http.StatusNotFound, "device not found")
+		return
+	}
+
+	// 必须在线
+	online, _ := h.rdb.IsDeviceOnline(c.Request.Context(), deviceID)
+	if !online {
+		Fail(c, http.StatusBadRequest, "device is offline")
+		return
+	}
+
+	// 必须绑定物模型且启用 voice 模块
+	if device.ModelID == nil || *device.ModelID == "" {
+		Fail(c, http.StatusBadRequest, "device has no thing model")
+		return
+	}
+	tm, err := h.thingModelRepo.GetByID(ctx, *device.ModelID)
+	if err != nil {
+		Fail(c, http.StatusInternalServerError, "failed to load thing model")
+		return
+	}
+	hasVoice := false
+	for _, m := range tm.Modules {
+		if m.ID == "voice" {
+			hasVoice = true
+			break
+		}
+	}
+	if !hasVoice {
+		Fail(c, http.StatusBadRequest, "thing model does not have voice module enabled")
+		return
+	}
+
+	// 同步调用语音处理链路
+	result := h.voiceProcessor.ProcessCommand(deviceID, req.Text)
+
+	// 判断连接类型
+	realConn := h.publisher.IsClientConnected(deviceID)
+	connType := "simulated"
+	if realConn {
+		connType = "real"
+	}
+
+	// 记录调试日志
+	userID := c.GetString("user_id")
+	debugLog := &model.DebugLog{
+		UserID:         userID,
+		DeviceID:       deviceID,
+		DeviceName:     device.Name,
+		ConnectionType: connType,
+		ActionType:     "voice_command",
+		Request:        map[string]interface{}{"text": req.Text},
+		Success:        result.Success,
+		Response:       map[string]interface{}{"message": result.Message, "action": result.Action},
+	}
+	if !result.Success {
+		debugLog.ErrorMessage = result.Message
+	}
+	if h.debugLogRepo != nil {
+		h.debugLogRepo.Create(context.Background(), debugLog)
+	}
+
+	Success(c, gin.H{
+		"success":   result.Success,
+		"message":   result.Message,
+		"action":    result.Action,
+		"audio_url": result.AudioURL,
+	})
 }
 
 func (h *DebugHandler) Debug(c *gin.Context) {

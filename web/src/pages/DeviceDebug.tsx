@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from 'react';
 import { toast } from 'sonner';
-import { Terminal, Send, Power, Wifi, Radio, History, RefreshCw } from 'lucide-react';
+import { Terminal, Send, Power, Wifi, Radio, History, RefreshCw, Mic } from 'lucide-react';
 import { deviceApi, thingModelApi } from '../api';
 import type { Device, ThingModel, Property, Service, DeviceLatestData, DebugLog } from '../api';
 import { onWSMessage } from './Dashboard';
@@ -36,6 +36,9 @@ export default function DeviceDebug() {
   const [logsPage, setLogsPage] = useState(1);
   const [logsPageSize, setLogsPageSize] = useState(20);
   const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [voiceText, setVoiceText] = useState('');
+  const [voiceSending, setVoiceSending] = useState(false);
+  const [voiceResults, setVoiceResults] = useState<Array<{ text: string; result: { success: boolean; message: string; action?: string; audio_url?: string }; time: string }>>([]);
 
   // 模拟上线心跳：每 2 分钟续期，停止时清理
   useEffect(() => {
@@ -78,6 +81,13 @@ export default function DeviceDebug() {
         // 设备状态变化时重新查询连接类型
         fetchConnectionType(selectedId);
       }
+      if (msg.type === 'voice_down' && msg.data?.device_id === selectedId) {
+        setVoiceResults((prev) => [{
+          text: msg.data.text || '',
+          result: { success: msg.data.success, message: msg.data.message, action: msg.data.action, audio_url: msg.data.audio_url },
+          time: new Date().toISOString(),
+        }, ...prev].slice(0, 20));
+      }
     });
   }, [selectedId]);
 
@@ -106,6 +116,8 @@ export default function DeviceDebug() {
     setConnType('offline');
     setDebugLogs([]);
     setLogsPage(1);
+    setVoiceText('');
+    setVoiceResults([]);
     try {
       const [devRes, dataRes, connRes] = await Promise.all([
         deviceApi.get(id),
@@ -142,6 +154,7 @@ export default function DeviceDebug() {
 
   const rwProps = thingModel?.properties?.filter((p) => p.accessMode === 'rw') || [];
   const services = thingModel?.services || [];
+  const hasVoiceModule = thingModel?.modules?.some((m) => m.id === 'voice') || false;
   const isOnline = connType !== 'offline';
   const isReal = connType === 'real';
 
@@ -209,6 +222,30 @@ export default function DeviceDebug() {
       toast.error(msg);
     }
     finally { setSimulating(false); }
+  };
+
+  const handleVoiceSend = async () => {
+    if (!voiceText.trim()) {
+      toast.error('请输入语音指令文本');
+      return;
+    }
+    setVoiceSending(true);
+    const text = voiceText.trim();
+    try {
+      const res = await deviceApi.voiceDebug(selectedId, text);
+      const d = res.data;
+      setVoiceResults((prev) => [{
+        text,
+        result: { success: d.success, message: d.message, action: d.action, audio_url: d.audio_url },
+        time: new Date().toISOString(),
+      }, ...prev].slice(0, 20));
+      setVoiceText('');
+    } catch (e: unknown) {
+      const msg = (e as { response?: { data?: { msg?: string } } })?.response?.data?.msg || '发送失败';
+      toast.error(msg);
+    } finally {
+      setVoiceSending(false);
+    }
   };
 
   const renderConnBadge = () => {
@@ -326,6 +363,7 @@ export default function DeviceDebug() {
             <TabsTrigger value="properties">属性设置</TabsTrigger>
             <TabsTrigger value="services">服务调用</TabsTrigger>
             <TabsTrigger value="history">调试历史</TabsTrigger>
+            {hasVoiceModule && <TabsTrigger value="voice">语音调试</TabsTrigger>}
           </TabsList>
 
           {isReal && (
@@ -431,7 +469,7 @@ export default function DeviceDebug() {
                               {log.connection_type === 'real' ? 'MQTT' : '模拟'}
                             </Badge>
                             <Badge variant={log.action_type === 'property_set' ? 'outline' : 'secondary'}>
-                              {log.action_type === 'property_set' ? '属性设置' : '服务调用'}
+                              {log.action_type === 'property_set' ? '属性设置' : log.action_type === 'voice_command' ? '语音指令' : '服务调用'}
                             </Badge>
                             <Badge variant={log.success ? 'default' : 'destructive'}>
                               {log.success ? '成功' : '失败'}
@@ -472,6 +510,61 @@ export default function DeviceDebug() {
               </CardContent>
             </Card>
           </TabsContent>
+
+          {hasVoiceModule && (
+            <TabsContent value="voice" className="space-y-4">
+              <Card>
+                <CardHeader><CardTitle className="text-base flex items-center gap-2"><Mic className="h-4 w-4" />语音指令调试</CardTitle></CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="flex items-center gap-3">
+                    <Input
+                      className="flex-1"
+                      placeholder="输入语音指令文本，如：打开灯、调高亮度、设置温度到25"
+                      value={voiceText}
+                      onChange={(e) => setVoiceText(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter' && !voiceSending) handleVoiceSend(); }}
+                    />
+                    <Button onClick={handleVoiceSend} disabled={voiceSending || !voiceText.trim()}>
+                      {voiceSending ? <Spinner className="h-4 w-4 mr-2" /> : <Send className="h-4 w-4 mr-2" />}
+                      发送
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    通过 voice/up topic 发送文本指令，经语音处理链路（本地 NLP / Dify）解析并执行，结果通过 voice/down 实时返回
+                  </p>
+                </CardContent>
+              </Card>
+
+              {voiceResults.length > 0 && (
+                <Card>
+                  <CardHeader><CardTitle className="text-base">执行结果</CardTitle></CardHeader>
+                  <CardContent>
+                    <div className="space-y-2 max-h-96 overflow-y-auto">
+                      {voiceResults.map((item, idx) => (
+                        <div key={idx} className="border rounded-lg p-3 text-sm space-y-1">
+                          <div className="flex items-center justify-between">
+                            <Badge variant={item.result.success ? 'default' : 'destructive'}>
+                              {item.result.success ? '成功' : '失败'}
+                            </Badge>
+                            <span className="text-xs text-muted-foreground">
+                              {new Date(item.time).toLocaleString('zh-CN')}
+                            </span>
+                          </div>
+                          <div className="text-muted-foreground">{item.result.message}</div>
+                          {item.result.action && (
+                            <div className="font-mono text-xs bg-muted p-2 rounded">{item.result.action}</div>
+                          )}
+                          {item.result.audio_url && (
+                            <audio controls src={item.result.audio_url} className="w-full h-8 mt-1" />
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+            </TabsContent>
+          )}
         </Tabs>
       )}
     </div>

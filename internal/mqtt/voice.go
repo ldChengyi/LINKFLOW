@@ -9,6 +9,7 @@ import (
 	"github.com/ldchengyi/linkflow/internal/ai"
 	"github.com/ldchengyi/linkflow/internal/logger"
 	"github.com/ldchengyi/linkflow/internal/model"
+	"github.com/ldchengyi/linkflow/internal/ws"
 )
 
 // VoiceHandler 语音指令处理器（Pipeline 模式）
@@ -42,36 +43,62 @@ func (h *VoiceHandler) HandleVoiceCommand(deviceID string, payload []byte) {
 		return
 	}
 
-	logger.Log.Infof("Voice command received: device_id=%s, text=%s", deviceID, cmd.Text)
+	result := h.ProcessCommand(deviceID, cmd.Text)
+	h.reply(deviceID, result)
+}
 
-	// 获取发送指令的设备信息
-	infoVal, ok := h.broker.devices.Load(deviceID)
-	if !ok {
-		h.reply(deviceID, &model.VoiceResult{Success: false, Message: "设备信息未找到"})
-		return
-	}
-	info := infoVal.(DeviceInfo)
+// ProcessCommand 同步处理语音指令，返回结果（供 HTTP 调试接口直接调用）
+func (h *VoiceHandler) ProcessCommand(deviceID, text string) *model.VoiceResult {
+	logger.Log.Infof("Voice command received: device_id=%s, text=%s", deviceID, text)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
+	// 获取发送指令的设备信息（缓存未命中时查 DB，支持模拟设备场景）
+	infoVal, ok := h.broker.devices.Load(deviceID)
+	if !ok {
+		device, err := h.broker.deviceRepo.GetByID(ctx, deviceID)
+		if err != nil {
+			return &model.VoiceResult{Success: false, Message: "设备信息未找到"}
+		}
+		info := DeviceInfo{UserID: device.UserID, DeviceName: device.Name}
+		if device.ModelID != nil {
+			info.ModelID = *device.ModelID
+		}
+		h.broker.devices.Store(deviceID, info)
+		infoVal = info
+	}
+	info := infoVal.(DeviceInfo)
+
+	var result *model.VoiceResult
+
 	// 根据 voice_mode 选择处理路径
 	settings := h.broker.GetVoiceSettings()
 	if settings.Mode == "dify" && settings.APIURL != "" && settings.APIKey != "" {
-		result := h.handleWithDify(ctx, deviceID, cmd.Text, info)
-		h.reply(deviceID, result)
-		return
+		result = h.handleWithDify(ctx, deviceID, text, info)
+	} else {
+		// 本地 NLP 路径（默认）
+		pc := &PipelineContext{
+			RawText:  text,
+			DeviceID: deviceID,
+			UserID:   info.UserID,
+		}
+		result = h.pipeline.Run(ctx, pc)
 	}
 
-	// 本地 NLP 路径（默认）
-	pc := &PipelineContext{
-		RawText:  cmd.Text,
-		DeviceID: deviceID,
-		UserID:   info.UserID,
+	// TTS 合成
+	if h.broker.ttsService != nil && result.Message != "" {
+		ttsCtx, ttsCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer ttsCancel()
+		filename, err := h.broker.ttsService.Synthesize(ttsCtx, result.Message)
+		if err != nil {
+			logger.Log.Warnf("Voice TTS failed: device_id=%s, err=%v", deviceID, err)
+		} else {
+			result.AudioURL = "/api/tts/" + filename
+		}
 	}
 
-	result := h.pipeline.Run(ctx, pc)
-	h.reply(deviceID, result)
+	return result
 }
 
 // reply 回复语音指令结果
@@ -93,6 +120,26 @@ func (h *VoiceHandler) reply(deviceID string, result *model.VoiceResult) {
 	payload, _ := json.Marshal(result)
 	if err := h.broker.Publish(topic, payload, false, 1); err != nil {
 		logger.Log.Errorf("Voice: failed to reply: device_id=%s, err=%v", deviceID, err)
+	}
+
+	// WebSocket 推送语音结果，供前端调试页面实时展示
+	if h.broker.hub != nil {
+		if infoVal, ok := h.broker.devices.Load(deviceID); ok {
+			info := infoVal.(DeviceInfo)
+			logger.Log.Infof("Voice WS push: device_id=%s, user_id=%s, success=%v", deviceID, info.UserID, result.Success)
+			h.broker.hub.SendToUser(info.UserID, &ws.Message{
+				Type: "voice_down",
+				Data: map[string]interface{}{
+					"device_id": deviceID,
+					"success":   result.Success,
+					"message":   result.Message,
+					"action":    result.Action,
+					"audio_url": result.AudioURL,
+				},
+			})
+		} else {
+			logger.Log.Warnf("Voice WS push skipped: device_id=%s not found in devices cache", deviceID)
+		}
 	}
 }
 

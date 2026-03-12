@@ -73,6 +73,9 @@ type Broker struct {
 	ttsDoubaoResourceID string
 	ttsDoubaoSpeakerID string
 	settingsLoadAt time.Time
+
+	// 语音处理器（单例）
+	voiceHandler *VoiceHandler
 }
 
 // NewBroker 创建 MQTT Broker
@@ -114,6 +117,8 @@ func NewBroker(
 
 // Start 启动 MQTT broker
 func (b *Broker) Start() error {
+	b.voiceHandler = NewVoiceHandler(b)
+
 	b.server = mochi.New(&mochi.Options{
 		InlineClient: true,
 	})
@@ -155,6 +160,11 @@ func (b *Broker) Stop(_ context.Context) error {
 	}
 	logger.Log.Info("Stopping MQTT broker...")
 	return b.server.Close()
+}
+
+// VoiceHandler 返回语音处理器实例
+func (b *Broker) VoiceHandler() *VoiceHandler {
+	return b.voiceHandler
 }
 
 // pushStats 推送统计更新给用户
