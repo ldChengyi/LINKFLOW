@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { Settings2, Mic, ChevronDown, ChevronRight, Save, Info } from 'lucide-react';
-import { settingsApi } from '../api';
+import { Settings2, Mic, Volume2, ChevronDown, ChevronRight, Save, Info, Play, Square } from 'lucide-react';
+import { settingsApi, ttsApi } from '../api';
 import type { PlatformSettings } from '../api';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -17,8 +17,17 @@ export default function Settings() {
     voice_mode: 'local',
     dify_api_url: '',
     dify_api_key: '',
+    tts_provider: 'edge',
+    tts_doubao_app_id: '',
+    tts_doubao_access_key: '',
+    tts_doubao_resource_id: 'seed-icl-1.0',
+    tts_doubao_speaker_id: '',
   });
   const [guideOpen, setGuideOpen] = useState(false);
+  const [testText, setTestText] = useState('');
+  const [testing, setTesting] = useState(false);
+  const [audioUrl, setAudioUrl] = useState('');
+  const audioRef = useRef<HTMLAudioElement>(null);
 
   useEffect(() => {
     fetchSettings();
@@ -42,6 +51,11 @@ export default function Settings() {
         voice_mode: settings.voice_mode,
         dify_api_url: settings.dify_api_url,
         dify_api_key: settings.dify_api_key,
+        tts_provider: settings.tts_provider,
+        tts_doubao_app_id: settings.tts_doubao_app_id,
+        tts_doubao_access_key: settings.tts_doubao_access_key,
+        tts_doubao_resource_id: settings.tts_doubao_resource_id,
+        tts_doubao_speaker_id: settings.tts_doubao_speaker_id,
       });
       setSettings(res.data);
       toast.success('设置已保存');
@@ -172,7 +186,182 @@ export default function Settings() {
         </CardContent>
       </Card>
 
-      {/* Dify 工作流配置说明（折叠卡片） */}
+      {/* TTS 语音播报设置卡片 */}
+      <Card>
+        <CardContent className="p-6 space-y-5">
+          <div className="flex items-center gap-2 mb-1">
+            <Volume2 className="h-4 w-4 text-primary" />
+            <h3 className="font-medium">语音播报引擎</h3>
+          </div>
+
+          {/* TTS 引擎选择 */}
+          <div className="space-y-3">
+            <label
+              className={cn(
+                'flex items-start gap-3 p-4 rounded-lg border cursor-pointer transition-colors',
+                settings.tts_provider === 'edge'
+                  ? 'border-primary bg-primary/5'
+                  : 'border-border hover:border-muted-foreground/50'
+              )}
+              onClick={() => setSettings((s) => ({ ...s, tts_provider: 'edge' }))}
+            >
+              <div className={cn(
+                'mt-0.5 h-4 w-4 rounded-full border-2 flex items-center justify-center shrink-0',
+                settings.tts_provider === 'edge' ? 'border-primary' : 'border-muted-foreground'
+              )}>
+                {settings.tts_provider === 'edge' && (
+                  <div className="h-2 w-2 rounded-full bg-primary" />
+                )}
+              </div>
+              <div>
+                <p className="font-medium text-sm">Edge TTS（默认）</p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  使用微软 Edge TTS 引擎，免费、无需配置，支持中文语音合成
+                </p>
+              </div>
+            </label>
+
+            <label
+              className={cn(
+                'flex items-start gap-3 p-4 rounded-lg border cursor-pointer transition-colors',
+                settings.tts_provider === 'doubao'
+                  ? 'border-primary bg-primary/5'
+                  : 'border-border hover:border-muted-foreground/50'
+              )}
+              onClick={() => setSettings((s) => ({ ...s, tts_provider: 'doubao' }))}
+            >
+              <div className={cn(
+                'mt-0.5 h-4 w-4 rounded-full border-2 flex items-center justify-center shrink-0',
+                settings.tts_provider === 'doubao' ? 'border-primary' : 'border-muted-foreground'
+              )}>
+                {settings.tts_provider === 'doubao' && (
+                  <div className="h-2 w-2 rounded-full bg-primary" />
+                )}
+              </div>
+              <div>
+                <p className="font-medium text-sm">豆包声音复刻（火山引擎）</p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  使用豆包 TTS V3 接口，支持声音复刻自定义音色，音质更好，需配置火山引擎账号
+                </p>
+              </div>
+            </label>
+          </div>
+
+          {/* 豆包连接参数（仅 doubao 模式下展示） */}
+          {settings.tts_provider === 'doubao' && (
+            <div className="space-y-4 pt-2 border-t border-border">
+              <div className="space-y-1.5">
+                <Label htmlFor="doubao-app-id">App ID</Label>
+                <Input
+                  id="doubao-app-id"
+                  placeholder="火山引擎控制台获取的 APP ID"
+                  value={settings.tts_doubao_app_id}
+                  onChange={(e) => setSettings((s) => ({ ...s, tts_doubao_app_id: e.target.value }))}
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="doubao-access-key">Access Key</Label>
+                <Input
+                  id="doubao-access-key"
+                  type="password"
+                  placeholder={settings.tts_doubao_access_key.startsWith('****') ? settings.tts_doubao_access_key : '火山引擎控制台获取的 Access Token'}
+                  value={settings.tts_doubao_access_key.startsWith('****') ? '' : settings.tts_doubao_access_key}
+                  onChange={(e) => setSettings((s) => ({ ...s, tts_doubao_access_key: e.target.value }))}
+                />
+                <p className="text-xs text-muted-foreground">留空则保留已保存的值</p>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="doubao-resource-id">资源 ID</Label>
+                <Input
+                  id="doubao-resource-id"
+                  placeholder="seed-icl-1.0"
+                  value={settings.tts_doubao_resource_id}
+                  onChange={(e) => setSettings((s) => ({ ...s, tts_doubao_resource_id: e.target.value }))}
+                />
+                <p className="text-xs text-muted-foreground">
+                  声音复刻 ICL 1.0 字符版: <code className="bg-muted px-1 rounded">seed-icl-1.0</code>，
+                  并发版: <code className="bg-muted px-1 rounded">seed-icl-1.0-concurr</code>，
+                  ICL 2.0: <code className="bg-muted px-1 rounded">seed-icl-2.0</code>
+                </p>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="doubao-speaker-id">音色 ID</Label>
+                <Input
+                  id="doubao-speaker-id"
+                  placeholder="S_xxxxxxx"
+                  value={settings.tts_doubao_speaker_id}
+                  onChange={(e) => setSettings((s) => ({ ...s, tts_doubao_speaker_id: e.target.value }))}
+                />
+                <p className="text-xs text-muted-foreground">
+                  从火山引擎控制台获取的声音复刻音色 ID，以 <code className="bg-muted px-1 rounded">S_</code> 开头
+                </p>
+              </div>
+            </div>
+          )}
+
+          <Button onClick={handleSave} disabled={saving} className="w-full sm:w-auto">
+            {saving ? <Spinner size="sm" className="mr-2" /> : <Save className="h-4 w-4 mr-2" />}
+            保存设置
+          </Button>
+
+          {/* TTS 试听测试 */}
+          <div className="space-y-3 pt-4 border-t border-border">
+            <p className="text-sm font-medium">语音合成试听</p>
+            <div className="flex gap-2">
+              <Input
+                placeholder="输入测试文本，如：欢迎使用LinkFlow物联网平台"
+                value={testText}
+                onChange={(e) => setTestText(e.target.value)}
+                className="flex-1"
+              />
+              <Button
+                variant="outline"
+                disabled={testing || !testText.trim()}
+                onClick={async () => {
+                  setTesting(true);
+                  setAudioUrl('');
+                  try {
+                    const res = await ttsApi.test(testText.trim());
+                    const url = res.data.audio_url;
+                    setAudioUrl(url);
+                    const audio = audioRef.current;
+                    if (audio) {
+                      audio.src = url;
+                      audio.play();
+                    }
+                  } catch (err: any) {
+                    toast.error(err?.response?.data?.msg || 'TTS 合成失败');
+                  } finally {
+                    setTesting(false);
+                  }
+                }}
+              >
+                {testing ? <Spinner size="sm" className="mr-1" /> : <Play className="h-4 w-4 mr-1" />}
+                试听
+              </Button>
+              {audioUrl && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => {
+                    const audio = audioRef.current;
+                    if (audio) { audio.pause(); audio.currentTime = 0; }
+                    setAudioUrl('');
+                  }}
+                >
+                  <Square className="h-4 w-4" />
+                </Button>
+              )}
+            </div>
+            {audioUrl && (
+              <audio ref={audioRef} controls className="w-full h-8" src={audioUrl} />
+            )}
+          </div>
+        </CardContent>
+      </Card>
       <Card>
         <CardContent className="p-0">
           <button

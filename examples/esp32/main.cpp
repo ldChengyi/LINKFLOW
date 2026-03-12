@@ -585,6 +585,7 @@ void handleVoiceDown(JsonDocument &doc)
     bool success = doc["success"] | false;
     const char *message = doc["message"] | "no message";
     const char *action = doc["action"] | "";
+    const char *audioURL = doc["audio_url"] | "";
 
     Serial.printf("[Voice] %s: %s\n", success ? "OK" : "FAIL", message);
     if (strlen(action) > 0)
@@ -592,6 +593,33 @@ void handleVoiceDown(JsonDocument &doc)
         Serial.printf("[Voice] Action: %s\n", action);
     }
 
-    // 语音执行结果只做日志打印
-    // 实际属性变更会通过 telemetry/down 单独下发
+    // TTS 音频播放
+    if (strlen(audioURL) > 0)
+    {
+        Serial.printf("[Voice] Audio URL: %s\n", audioURL);
+
+        // TODO: 下载并播放音频
+        // 需要集成音频库（如 ESP32-audioI2S）来播放 MP3
+        // 示例流程：
+        // 1. HTTPClient 下载音频文件
+        // 2. 使用 MP3 解码器解码
+        // 3. 通过 I2S 输出到 ES8311
+        // 4. ES8311 → NS4150B → 扬声器
+
+        // 简化示例：只下载不播放
+        HTTPClient http;
+        http.begin(audioURL);
+        int httpCode = http.GET();
+        if (httpCode == HTTP_CODE_OK)
+        {
+            int len = http.getSize();
+            Serial.printf("[Voice] Audio downloaded: %d bytes\n", len);
+            // 这里可以保存到 SPIFFS 或直接播放
+        }
+        else
+        {
+            Serial.printf("[Voice] Audio download failed: %d\n", httpCode);
+        }
+        http.end();
+    }
 }

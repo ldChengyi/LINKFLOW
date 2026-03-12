@@ -76,6 +76,19 @@ func (h *VoiceHandler) HandleVoiceCommand(deviceID string, payload []byte) {
 
 // reply 回复语音指令结果
 func (h *VoiceHandler) reply(deviceID string, result *model.VoiceResult) {
+	// 生成 TTS 音频
+	if h.broker.ttsService != nil && result.Message != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		filename, err := h.broker.ttsService.Synthesize(ctx, result.Message)
+		if err != nil {
+			logger.Log.Warnf("Voice TTS failed: device_id=%s, err=%v", deviceID, err)
+		} else {
+			result.AudioURL = fmt.Sprintf("%s/tts/%s", h.broker.baseURL, filename)
+		}
+	}
+
 	topic := fmt.Sprintf("devices/%s/voice/down", deviceID)
 	payload, _ := json.Marshal(result)
 	if err := h.broker.Publish(topic, payload, false, 1); err != nil {

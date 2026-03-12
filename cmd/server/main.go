@@ -19,6 +19,7 @@ import (
 	"github.com/ldchengyi/linkflow/internal/repository"
 	"github.com/ldchengyi/linkflow/internal/scheduler"
 	"github.com/ldchengyi/linkflow/internal/service"
+	"github.com/ldchengyi/linkflow/internal/tts"
 	"github.com/ldchengyi/linkflow/internal/ws"
 )
 
@@ -109,9 +110,18 @@ func main() {
 	// 调试日志 Repository
 	debugLogRepo := repository.NewDebugLogRepository(db.App())
 
-	// 初始化 MQTT Broker
+	// 初始化 TTS 服务
+	ttsStorageDir := "uploads/tts"
+	os.MkdirAll(ttsStorageDir, 0755)
+	edgeTTS := tts.NewEdgeTTSService(ttsStorageDir)
+
+	// 初始化 MQTT Broker（先用 edge-tts，后面替换为 doubao 包装）
 	baseURL := "http://localhost:" + cfg.Server.Port
-	broker := mqttbroker.NewBroker(cfg.MQTT, mqttDeviceRepo, mqttThingModelRepo, deviceDataRepo, auditLogRepo, mqttAlertRuleRepo, mqttAlertLogRepo, mqttOTATaskRepo, mqttFirmwareRepo, settingsRepo, svcCallLogRepoAdmin, rdb, hub, baseURL)
+	broker := mqttbroker.NewBroker(cfg.MQTT, mqttDeviceRepo, mqttThingModelRepo, deviceDataRepo, auditLogRepo, mqttAlertRuleRepo, mqttAlertLogRepo, mqttOTATaskRepo, mqttFirmwareRepo, settingsRepo, svcCallLogRepoAdmin, rdb, hub, baseURL, edgeTTS)
+
+	// 用 DoubaoTTSService 包装：动态从 platform_settings 读取配置，edge-tts 作为 fallback
+	doubaoTTS := tts.NewDoubaoTTSService(ttsStorageDir, broker, edgeTTS)
+	broker.SetTTSService(doubaoTTS)
 	if err := broker.Start(); err != nil {
 		logger.Log.Fatalf("Failed to start MQTT broker: %v", err)
 	}
@@ -138,6 +148,7 @@ func main() {
 	firmwareHandler := handler.NewFirmwareHandler(firmwareRepoApp, mqttDeviceRepo, db.App())
 	otaTaskHandler := handler.NewOTATaskHandler(otaTaskRepoApp, firmwareRepoApp, deviceRepo, db.App(), broker, baseURL)
 	settingsHandler := handler.NewSettingsHandler(settingsRepo, broker)
+	ttsHandler := handler.NewTTSHandler(ttsStorageDir, doubaoTTS)
 
 	// 设置路由
 	router := gin.Default()
@@ -163,6 +174,9 @@ func main() {
 
 		// 固件下载（设备通过 Basic Auth 认证，不走 JWT）
 		api.GET("/firmwares/:id/download", firmwareHandler.Download)
+
+		// TTS 音频下载（公开访问）
+		api.GET("/tts/:filename", ttsHandler.Download)
 
 		// 需要认证的路由
 		protected := api.Group("")
@@ -270,6 +284,9 @@ func main() {
 			// 平台设置路由
 			protected.GET("/settings", settingsHandler.Get)
 			protected.PUT("/settings", settingsHandler.Update)
+
+			// TTS 测试路由
+			protected.POST("/tts/test", ttsHandler.Test)
 		}
 	}
 

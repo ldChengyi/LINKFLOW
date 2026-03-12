@@ -37,9 +37,14 @@ func (h *SettingsHandler) Get(c *gin.Context) {
 	}
 
 	settings := &model.PlatformSettings{
-		VoiceMode:  kv["voice_mode"],
-		DifyAPIURL: kv["dify_api_url"],
-		DifyAPIKey: maskAPIKey(kv["dify_api_key"]),
+		VoiceMode:           kv["voice_mode"],
+		DifyAPIURL:          kv["dify_api_url"],
+		DifyAPIKey:          maskAPIKey(kv["dify_api_key"]),
+		TTSProvider:         kv["tts_provider"],
+		TTSDoubaoAppID:      kv["tts_doubao_app_id"],
+		TTSDoubaoAccessKey:  maskAPIKey(kv["tts_doubao_access_key"]),
+		TTSDoubaoResourceID: kv["tts_doubao_resource_id"],
+		TTSDoubaoSpeakerID:  kv["tts_doubao_speaker_id"],
 	}
 	Success(c, settings)
 }
@@ -67,6 +72,23 @@ func (h *SettingsHandler) Update(c *gin.Context) {
 		toUpdate["dify_api_key"] = req.DifyAPIKey
 	}
 
+	// TTS 设置
+	if req.TTSProvider == "edge" || req.TTSProvider == "doubao" {
+		toUpdate["tts_provider"] = req.TTSProvider
+	}
+	if req.TTSDoubaoAppID != "" {
+		toUpdate["tts_doubao_app_id"] = req.TTSDoubaoAppID
+	}
+	if req.TTSDoubaoAccessKey != "" && !isMasked(req.TTSDoubaoAccessKey) {
+		toUpdate["tts_doubao_access_key"] = req.TTSDoubaoAccessKey
+	}
+	if req.TTSDoubaoResourceID != "" {
+		toUpdate["tts_doubao_resource_id"] = req.TTSDoubaoResourceID
+	}
+	if req.TTSDoubaoSpeakerID != "" {
+		toUpdate["tts_doubao_speaker_id"] = req.TTSDoubaoSpeakerID
+	}
+
 	if len(toUpdate) > 0 {
 		if err := h.repo.SetMany(ctx, toUpdate); err != nil {
 			logger.Log.Errorf("SettingsHandler.Update: %v", err)
@@ -85,9 +107,14 @@ func (h *SettingsHandler) Update(c *gin.Context) {
 		return
 	}
 	settings := &model.PlatformSettings{
-		VoiceMode:  kv["voice_mode"],
-		DifyAPIURL: kv["dify_api_url"],
-		DifyAPIKey: maskAPIKey(kv["dify_api_key"]),
+		VoiceMode:           kv["voice_mode"],
+		DifyAPIURL:          kv["dify_api_url"],
+		DifyAPIKey:          maskAPIKey(kv["dify_api_key"]),
+		TTSProvider:         kv["tts_provider"],
+		TTSDoubaoAppID:      kv["tts_doubao_app_id"],
+		TTSDoubaoAccessKey:  maskAPIKey(kv["tts_doubao_access_key"]),
+		TTSDoubaoResourceID: kv["tts_doubao_resource_id"],
+		TTSDoubaoSpeakerID:  kv["tts_doubao_speaker_id"],
 	}
 	Success(c, settings)
 }

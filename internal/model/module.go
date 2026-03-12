@@ -41,7 +41,8 @@ type VoiceCommand struct {
 
 // VoiceResult 语音指令执行结果
 type VoiceResult struct {
-	Success bool   `json:"success"`
-	Message string `json:"message"`
-	Action  string `json:"action,omitempty"`  // 执行的动作描述
+	Success  bool   `json:"success"`
+	Message  string `json:"message"`
+	Action   string `json:"action,omitempty"`   // 执行的动作描述
+	AudioURL string `json:"audio_url,omitempty"` // TTS 音频下载地址
 }

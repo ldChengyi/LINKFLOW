@@ -13,6 +13,7 @@ import (
 	"github.com/ldchengyi/linkflow/internal/config"
 	"github.com/ldchengyi/linkflow/internal/logger"
 	"github.com/ldchengyi/linkflow/internal/repository"
+	"github.com/ldchengyi/linkflow/internal/tts"
 	"github.com/ldchengyi/linkflow/internal/ws"
 )
 
@@ -22,6 +23,10 @@ type VoiceSettings struct {
 	APIURL string
 	APIKey string
 }
+
+// TTSSettings TTS 语音播报配置快照
+// Deprecated: use tts.TTSSettings, kept for broker internal use
+type TTSSettings = tts.TTSSettings
 
 // DeviceInfo 缓存已连接设备的信息
 type DeviceInfo struct {
@@ -47,6 +52,7 @@ type Broker struct {
 	rdb             *cache.Redis
 	hub             *ws.Hub
 	baseURL         string
+	ttsService      tts.Service
 
 	// 已连接设备缓存: device_id → DeviceInfo
 	devices sync.Map
@@ -60,6 +66,12 @@ type Broker struct {
 	voiceMode      string
 	difyAPIURL     string
 	difyAPIKey     string
+	// TTS 设置缓存
+	ttsProvider        string
+	ttsDoubaoAppID     string
+	ttsDoubaoAccessKey string
+	ttsDoubaoResourceID string
+	ttsDoubaoSpeakerID string
 	settingsLoadAt time.Time
 }
 
@@ -79,6 +91,7 @@ func NewBroker(
 	rdb *cache.Redis,
 	hub *ws.Hub,
 	baseURL string,
+	ttsService tts.Service,
 ) *Broker {
 	return &Broker{
 		config:         cfg,
@@ -95,6 +108,7 @@ func NewBroker(
 		rdb:            rdb,
 		hub:            hub,
 		baseURL:        baseURL,
+		ttsService:     ttsService,
 	}
 }
 
@@ -182,46 +196,77 @@ func (b *Broker) Publish(topic string, payload []byte, retain bool, qos byte) er
 	return b.server.Publish(topic, payload, retain, qos)
 }
 
-// GetVoiceSettings 获取语音设置（30s TTL 内存缓存，过期从 DB 重载）
-func (b *Broker) GetVoiceSettings() VoiceSettings {
-	const ttl = 30 * time.Second
-
-	b.settingsMu.RLock()
-	if !b.settingsLoadAt.IsZero() && time.Since(b.settingsLoadAt) < ttl {
-		s := VoiceSettings{Mode: b.voiceMode, APIURL: b.difyAPIURL, APIKey: b.difyAPIKey}
-		b.settingsMu.RUnlock()
-		return s
-	}
-	b.settingsMu.RUnlock()
-
-	// 重新加载
-	b.settingsMu.Lock()
-	defer b.settingsMu.Unlock()
-
-	// double-check
-	if !b.settingsLoadAt.IsZero() && time.Since(b.settingsLoadAt) < ttl {
-		return VoiceSettings{Mode: b.voiceMode, APIURL: b.difyAPIURL, APIKey: b.difyAPIKey}
-	}
-
+// loadSettingsLocked 从 DB 加载所有 settings 到缓存（调用方需持有写锁）
+func (b *Broker) loadSettingsLocked() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	if b.settingsRepo != nil {
 		kv, err := b.settingsRepo.GetAll(ctx)
 		if err != nil {
-			logger.Log.Errorf("GetVoiceSettings: %v", err)
-		} else {
-			b.voiceMode = kv["voice_mode"]
-			b.difyAPIURL = kv["dify_api_url"]
-			b.difyAPIKey = kv["dify_api_key"]
-			b.settingsLoadAt = time.Now()
+			logger.Log.Errorf("loadSettingsLocked: %v", err)
+			return
 		}
+		b.voiceMode = kv["voice_mode"]
+		b.difyAPIURL = kv["dify_api_url"]
+		b.difyAPIKey = kv["dify_api_key"]
+		b.ttsProvider = kv["tts_provider"]
+		b.ttsDoubaoAppID = kv["tts_doubao_app_id"]
+		b.ttsDoubaoAccessKey = kv["tts_doubao_access_key"]
+		b.ttsDoubaoResourceID = kv["tts_doubao_resource_id"]
+		b.ttsDoubaoSpeakerID = kv["tts_doubao_speaker_id"]
+		b.settingsLoadAt = time.Now()
 	}
 
 	if b.voiceMode == "" {
 		b.voiceMode = "local"
 	}
+	if b.ttsProvider == "" {
+		b.ttsProvider = "edge"
+	}
+}
+
+// ensureSettingsLoaded 确保 settings 缓存有效（30s TTL + double-check）
+func (b *Broker) ensureSettingsLoaded() {
+	const ttl = 30 * time.Second
+
+	b.settingsMu.RLock()
+	if !b.settingsLoadAt.IsZero() && time.Since(b.settingsLoadAt) < ttl {
+		b.settingsMu.RUnlock()
+		return
+	}
+	b.settingsMu.RUnlock()
+
+	b.settingsMu.Lock()
+	defer b.settingsMu.Unlock()
+
+	// double-check
+	if !b.settingsLoadAt.IsZero() && time.Since(b.settingsLoadAt) < ttl {
+		return
+	}
+	b.loadSettingsLocked()
+}
+
+// GetVoiceSettings 获取语音设置（30s TTL 内存缓存，过期从 DB 重载）
+func (b *Broker) GetVoiceSettings() VoiceSettings {
+	b.ensureSettingsLoaded()
+	b.settingsMu.RLock()
+	defer b.settingsMu.RUnlock()
 	return VoiceSettings{Mode: b.voiceMode, APIURL: b.difyAPIURL, APIKey: b.difyAPIKey}
+}
+
+// GetTTSSettings 获取 TTS 语音播报设置（30s TTL 内存缓存）
+func (b *Broker) GetTTSSettings() TTSSettings {
+	b.ensureSettingsLoaded()
+	b.settingsMu.RLock()
+	defer b.settingsMu.RUnlock()
+	return TTSSettings{
+		Provider:   b.ttsProvider,
+		AppID:      b.ttsDoubaoAppID,
+		AccessKey:  b.ttsDoubaoAccessKey,
+		ResourceID: b.ttsDoubaoResourceID,
+		SpeakerID:  b.ttsDoubaoSpeakerID,
+	}
 }
 
 // InvalidateSettingsCache 清除语音设置缓存，下次调用时重新从 DB 加载
@@ -229,4 +274,9 @@ func (b *Broker) InvalidateSettingsCache() {
 	b.settingsMu.Lock()
 	b.settingsLoadAt = time.Time{}
 	b.settingsMu.Unlock()
+}
+
+// SetTTSService 设置 TTS 服务（用于解决循环依赖：broker 创建后再注入）
+func (b *Broker) SetTTSService(svc tts.Service) {
+	b.ttsService = svc
 }

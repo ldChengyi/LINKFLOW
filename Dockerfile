@@ -26,15 +26,18 @@ WORKDIR /app
 # Use China mirror for faster package download
 RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories
 
-# Install ca-certificates for HTTPS
-RUN apk add --no-cache ca-certificates tzdata
+# Install ca-certificates for HTTPS and Python for TTS
+RUN apk add --no-cache ca-certificates tzdata python3 py3-pip
 
 # Copy binary and migrations
 COPY --from=builder /app/server .
 COPY --from=builder /app/migrations ./migrations
 
+# Install edge-tts for TTS
+RUN pip3 install --no-cache-dir edge-tts --break-system-packages
+
 # Create uploads directory
-RUN mkdir -p /app/uploads/firmwares
+RUN mkdir -p /app/uploads/firmwares /app/uploads/tts
 
 # Expose port
 EXPOSE 8080

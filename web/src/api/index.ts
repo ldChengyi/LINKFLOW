@@ -483,17 +483,31 @@ export interface PlatformSettings {
   voice_mode: 'local' | 'dify';
   dify_api_url: string;
   dify_api_key: string;
+  tts_provider: 'edge' | 'doubao';
+  tts_doubao_app_id: string;
+  tts_doubao_access_key: string;
+  tts_doubao_resource_id: string;
+  tts_doubao_speaker_id: string;
 }
 
 export interface UpdateSettingsRequest {
   voice_mode?: string;
   dify_api_url?: string;
   dify_api_key?: string;
+  tts_provider?: string;
+  tts_doubao_app_id?: string;
+  tts_doubao_access_key?: string;
+  tts_doubao_resource_id?: string;
+  tts_doubao_speaker_id?: string;
 }
 
 export const settingsApi = {
   get: () => api.get<PlatformSettings>('/settings'),
   update: (data: UpdateSettingsRequest) => api.put<PlatformSettings>('/settings', data),
+};
+
+export const ttsApi = {
+  test: (text: string) => api.post<{ audio_url: string }>('/tts/test', { text }),
 };
 
 export default api;
