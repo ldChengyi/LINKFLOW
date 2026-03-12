@@ -4,15 +4,18 @@
 // 功能覆盖:
 //   - WiFi 连接 + 自动重连
 //   - MQTT 认证 (device_id + device_secret)
-//   - 遥测上报 (telemetry/up)   — DHT11 温湿度
-//   - 属性下发 (telemetry/down) — 接收并执行属性设置，回传确认
+//   - 遥测上报 (telemetry/up)   — DHT11 温湿度 + WS2812 灯带状态
+//   - 属性下发 (telemetry/down) — 接收并执行属性设置，回传确认 + 确认音
 //   - 服务调用 (service/invoke) — 接收并执行服务，回传 reply
 //   - OTA 升级 (ota/down)       — HTTP 下载固件 + 进度上报 + 自动刷写
-//   - 语音结果 (voice/down)     — 接收语音执行结果
+//   - 语音结果 (voice/down)     — 接收语音执行结果 + 成功/失败音效
 //   - LED 模拟控制              — 板载 LED 演示 bool 属性开关
+//   - WS2812 灯带               — 8色 + 彩虹动画，支持语音/平台控制
+//   - 音频反馈                  — ES8311 + NS4150B 确认音/成功音/失败音
 //
 // 需要的库:
-//   PubSubClient, ArduinoJson (v7), DHT sensor library, Adafruit Unified Sensor
+//   PubSubClient, ArduinoJson (v7), DHT sensor library, Adafruit Unified Sensor,
+//   Adafruit NeoPixel
 //
 // 使用方式:
 //   1. 在 LinkFlow 平台创建物模型（属性: temperature, humidity, led_switch）
@@ -30,20 +33,23 @@
 #include <DHT_U.h>
 #include <HTTPClient.h>
 #include <Update.h>
+#include "audio.h"
+#include "ws2812.h"
+#include "tts_player.h"
 
 // ======================== 用户配置区 ========================
 
 // WiFi
-const char *WIFI_SSID = "YOUR_WIFI_SSID";
-const char *WIFI_PASS = "YOUR_WIFI_PASSWORD";
+const char *WIFI_SSID = "hqm";
+const char *WIFI_PASS = "chengs666";
 
 // MQTT Broker (LinkFlow 后端地址)
-const char *MQTT_HOST = "192.168.1.100"; // 改为你的 LinkFlow 服务器 IP
+const char *MQTT_HOST = "111.228.58.69"; // 改为你的 LinkFlow 服务器 IP
 const uint16_t MQTT_PORT = 1883;
 
 // 设备凭证 (从 LinkFlow 平台复制)
-const char *DEVICE_ID = "YOUR_DEVICE_UUID";     // 设备 ID (UUID)
-const char *DEVICE_SECRET = "YOUR_DEVICE_SECRET"; // 设备密钥 (64字符)
+const char *DEVICE_ID = "8943954d-4c53-4b84-a1fe-c553c980e782";                                 // 设备 ID (UUID)
+const char *DEVICE_SECRET = "3c1804107e2a9f82ea3230ca1db43d4977cd8632a93232413f6e0aadef2d4be4"; // 设备密钥 (64字符)
 
 // DHT 传感器
 #define DHT_PIN 4
@@ -63,6 +69,9 @@ const char *DEVICE_SECRET = "YOUR_DEVICE_SECRET"; // 设备密钥 (64字符)
 WiFiClient wifiClient;
 PubSubClient mqtt(wifiClient);
 DHT_Unified dht(DHT_PIN, DHT_TYPE);
+AudioModule audio;
+WS2812Module ledStrip;
+TTSPlayer ttsPlayer;
 
 // Topic 缓存 (避免反复拼接)
 String topicTelemetryUp;
@@ -75,6 +84,7 @@ String topicOtaUp;
 
 // 设备状态
 bool ledState = false;
+bool buzzerEnabled = true;
 float lastTemperature = NAN;
 float lastHumidity = NAN;
 String firmwareVersion = "1.0.0";
@@ -112,6 +122,27 @@ void setup()
     Serial.println(F("=== LinkFlow ESP32 Client ==="));
     Serial.printf("Firmware: v%s\n", firmwareVersion.c_str());
 
+    // 打印模块 & GPIO 分配
+    Serial.println(F(""));
+    Serial.println(F("========== Modules & GPIO =========="));
+    Serial.println(F(" [Board LED]    GPIO 2   — 板载 LED"));
+    Serial.println(F(" [DHT11]        GPIO 4   — 温湿度传感器"));
+    Serial.println(F(" [ES8311 I2C]   GPIO 14  — I2C SDA"));
+    Serial.println(F("                GPIO 27  — I2C SCL"));
+    Serial.println(F(" [ES8311 I2S]   GPIO 22  — I2S DIN (数据)"));
+    Serial.println(F("                GPIO 25  — I2S LRCK (左右声道)"));
+    Serial.println(F("                GPIO 26  — I2S SCLK (时钟)"));
+    Serial.println(F(" [WS2812]       GPIO 15  — 灯带 DIN"));
+    Serial.println(F("===================================="));
+    Serial.println(F(" Libraries required:"));
+    Serial.println(F("   - PubSubClient"));
+    Serial.println(F("   - ArduinoJson (v7)"));
+    Serial.println(F("   - DHT sensor library"));
+    Serial.println(F("   - Adafruit Unified Sensor"));
+    Serial.println(F("   - Adafruit NeoPixel"));
+    Serial.println(F("===================================="));
+    Serial.println(F(""));
+
     // LED
     pinMode(LED_PIN, OUTPUT);
     digitalWrite(LED_PIN, LOW);
@@ -121,6 +152,34 @@ void setup()
     sensor_t sensor;
     dht.temperature().getSensor(&sensor);
     Serial.printf("DHT Sensor: %s, min_delay=%ldus\n", sensor.name, sensor.min_delay);
+
+    // Audio — 初始化并默认启用
+    if (audio.begin())
+    {
+        audio.enable();
+        audio.playBeep(); // 开机提示音
+        Serial.println(F("[Audio] Module ready, enabled by default"));
+    }
+    else
+    {
+        Serial.println(F("[Audio] Module init FAILED — check I2C/I2S wiring"));
+    }
+
+    // TTS Player
+    ttsPlayer.begin(&audio);
+
+    // WS2812 LED Strip — 初始化并默认点亮
+    if (ledStrip.begin())
+    {
+        ledStrip.setSwitch(true);
+        ledStrip.setBrightness(128);
+        ledStrip.setColor(COLOR_CYAN);
+        Serial.println(F("[WS2812] Strip ON, color=CYAN, brightness=128"));
+    }
+    else
+    {
+        Serial.println(F("[WS2812] Strip init FAILED — check DIN wiring on GPIO 15"));
+    }
 
     // WiFi
     setupWiFi();
@@ -153,6 +212,9 @@ void loop()
     }
 
     mqtt.loop();
+
+    // WS2812 彩虹动画更新
+    ledStrip.update();
 
     // OTA 进行中不上报遥测
     if (otaInProgress)
@@ -333,8 +395,14 @@ void publishTelemetry()
 
     // 上报 LED 开关状态
     doc["led_switch"] = ledState;
+    doc["buzzer_enabled"] = buzzerEnabled;
 
-    char payload[256];
+    // 上报灯带状态
+    doc["strip_switch"] = ledStrip.isOn();
+    doc["led_color"] = ledStrip.getColor();
+    doc["strip_brightness"] = ledStrip.getBrightness();
+
+    char payload[384];
     serializeJson(doc, payload, sizeof(payload));
 
     mqtt.publish(topicTelemetryUp.c_str(), payload);
@@ -358,13 +426,49 @@ void handleTelemetryDown(JsonDocument &doc)
         changed = true;
     }
 
-    // 你可以在这里添加更多属性处理...
-    // 例如: brightness, color_mode 等
+    // 处理蜂鸣器
+    if (doc.containsKey("buzzer_enabled"))
+    {
+        buzzerEnabled = doc["buzzer_enabled"].as<bool>();
+        if (buzzerEnabled)
+        {
+            audio.enable();
+            audio.playTone(1000, 200); // 1kHz, 200ms
+        }
+        else
+        {
+            audio.disable();
+        }
+        Serial.printf("[CMD] buzzer_enabled = %s\n", buzzerEnabled ? "ON" : "OFF");
+        changed = true;
+    }
+
+    // 处理灯带开关
+    if (doc.containsKey("strip_switch"))
+    {
+        ledStrip.setSwitch(doc["strip_switch"].as<bool>());
+        changed = true;
+    }
+
+    // 处理灯带颜色
+    if (doc.containsKey("led_color"))
+    {
+        ledStrip.setColor(doc["led_color"].as<uint8_t>());
+        changed = true;
+    }
+
+    // 处理灯带亮度
+    if (doc.containsKey("strip_brightness"))
+    {
+        ledStrip.setBrightness(doc["strip_brightness"].as<uint8_t>());
+        changed = true;
+    }
 
     // 回传确认: 设备必须通过 telemetry/up 回传当前状态
     // 这样 LinkFlow 才能记录属性已生效
     if (changed)
     {
+        audio.playBeep(); // 属性变更确认音
         publishTelemetry();
     }
 }
@@ -413,6 +517,24 @@ void handleServiceInvoke(JsonDocument &doc)
         serializeJson(reply, payload, sizeof(payload));
         mqtt.publish(topicServiceReply.c_str(), payload);
         Serial.println(F("[CMD] Device info sent"));
+    }
+    else if (strcmp(service, "play_tone") == 0)
+    {
+        // 播放指定频率和时长的提示音
+        int frequency = doc["params"]["frequency"] | 1000;
+        int duration = doc["params"]["duration"] | 200;
+
+        audio.enable();
+        audio.playTone((uint16_t)frequency, (uint16_t)duration);
+        audio.disable();
+
+        reply["code"] = 200;
+        reply["message"] = "tone played";
+
+        char payload[256];
+        serializeJson(reply, payload, sizeof(payload));
+        mqtt.publish(topicServiceReply.c_str(), payload);
+        Serial.printf("[CMD] play_tone: %dHz %dms\n", frequency, duration);
     }
     else
     {
@@ -593,33 +715,21 @@ void handleVoiceDown(JsonDocument &doc)
         Serial.printf("[Voice] Action: %s\n", action);
     }
 
-    // TTS 音频播放
+    // TTS 音频播放（有 audio_url 时用 TTS，否则用提示音）
     if (strlen(audioURL) > 0)
     {
-        Serial.printf("[Voice] Audio URL: %s\n", audioURL);
-
-        // TODO: 下载并播放音频
-        // 需要集成音频库（如 ESP32-audioI2S）来播放 MP3
-        // 示例流程：
-        // 1. HTTPClient 下载音频文件
-        // 2. 使用 MP3 解码器解码
-        // 3. 通过 I2S 输出到 ES8311
-        // 4. ES8311 → NS4150B → 扬声器
-
-        // 简化示例：只下载不播放
-        HTTPClient http;
-        http.begin(audioURL);
-        int httpCode = http.GET();
-        if (httpCode == HTTP_CODE_OK)
+        ttsPlayer.play(audioURL);
+    }
+    else
+    {
+        // 无 TTS 时用简单音效反馈
+        if (success)
         {
-            int len = http.getSize();
-            Serial.printf("[Voice] Audio downloaded: %d bytes\n", len);
-            // 这里可以保存到 SPIFFS 或直接播放
+            audio.playSuccessTone();
         }
         else
         {
-            Serial.printf("[Voice] Audio download failed: %d\n", httpCode);
+            audio.playErrorTone();
         }
-        http.end();
     }
 }
