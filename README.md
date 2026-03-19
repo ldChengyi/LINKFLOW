@@ -29,8 +29,11 @@ LinkFlow 是一个基于 Go 的**轻量级物联网云平台**，适合作为学
 | 定时任务 | Cron 表达式驱动，支持属性设置和服务调用，MQTT 下发 |
 | 语音控制 | 本地 NLP 关键词匹配 或 Dify Workflow API，支持开关/数值/枚举/服务调用 |
 | OTA 升级 | 固件上传 → MQTT 推送升级命令 → 设备 HTTP 下载 → 进度实时上报 |
-| 在线调试 | 无需真实硬件，浏览器内模拟设备上下线、属性下发、服务调用 |
+| TTS 语音合成 | Edge TTS（免费默认）+ 豆包声音复刻（Doubao），语音指令结果语音播报 |
+| 在线调试 | 无需真实硬件，浏览器内模拟设备上下线、属性下发、服务调用、语音调试 |
 | 安全体系 | JWT 认证 + PostgreSQL RLS 行级安全 + 审计日志 |
+| 多主题 | 翠绿深色 / 天蓝浅色主题切换，localStorage 持久化 |
+| 平台设置 | 语音模式切换（本地/Dify）、TTS 引擎配置、API 密钥管理 |
 | CSV 导出 | 一键导出设备历史遥测数据 |
 
 ## 技术架构
@@ -260,6 +263,7 @@ linkflow/
 │   ├── repository/              # 数据访问层（手写 SQL）
 │   ├── scheduler/               # 定时任务 Cron 调度引擎
 │   ├── service/                 # 业务逻辑层 + 接口定义 + Mock
+│   ├── tts/                     # TTS 语音合成（Edge TTS + 豆包 Doubao）
 │   └── ws/                      # WebSocket Hub（实时推送）
 ├── web/                         # React 前端项目
 │   ├── src/pages/               # 页面组件
@@ -367,9 +371,12 @@ LinkFlow is a lightweight **IoT cloud platform** built with Go, designed for lea
 - **Alerts** — Threshold rules, 3 severity levels, cooldown, real-time WebSocket notifications
 - **Scheduled Tasks** — Cron-driven property setting and service invocation via MQTT
 - **Voice Control** — Local NLP keyword matching or Dify Workflow API integration
+- **TTS Speech** — Edge TTS (free default) + Doubao voice cloning, voice feedback for commands
 - **OTA Upgrades** — Firmware upload → MQTT push → HTTP download → progress reporting
-- **Online Debug** — Simulate device online/offline in browser without real hardware
+- **Online Debug** — Simulate device online/offline in browser, property setting, service invocation, voice debug
 - **Security** — JWT auth + PostgreSQL Row-Level Security + audit logs
+- **Themes** — Dark green / light blue theme switching with localStorage persistence
+- **Platform Settings** — Voice mode, TTS engine, Dify API configuration in one place
 
 ### Quick Start
 
