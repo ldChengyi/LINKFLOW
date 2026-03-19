@@ -63,92 +63,28 @@ func AuditLog(repo *repository.AuditLogRepository) gin.HandlerFunc {
 		}
 
 		start := time.Now()
-
-		// 读取并缓存请求体
-		var body map[string]any
-		if c.Request.Body != nil {
-			bodyBytes, _ := io.ReadAll(c.Request.Body)
-			c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
-			if len(bodyBytes) <= 10240 {
-				json.Unmarshal(bodyBytes, &body)
-			}
-		}
-
-		// 脱敏后的 body 作为 detail 基础
-		detail := make(map[string]any)
-		for k, v := range body {
-			if sensitiveFields[k] {
-				detail[k] = "***"
-			} else {
-				detail[k] = v
-			}
-		}
+		body := readRequestBody(c)
+		detail := sanitizeBody(body)
 
 		c.Next()
 
-		// 解析路由，生成可读的 action 和 resource_type
 		routeKey := method + " " + c.FullPath()
-		action := routeKey
-		resourceType := ""
-		if mapped, ok := actionMap[routeKey]; ok {
-			action = mapped.Action
-			resourceType = mapped.ResourceType
-		}
-
-		// 定时任务更新时，标注启用/禁用状态
-		if resourceType == "scheduled_task" && method == "PUT" {
-			if enabled, ok := body["enabled"].(bool); ok {
-				if enabled {
-					action = "启用定时任务"
-				} else {
-					action = "禁用定时任务"
-				}
-			}
-		}
-
-		// 提取资源名称
-		resourceName := ""
-		if name, ok := body["name"].(string); ok && name != "" {
-			resourceName = name
-		}
-		if email, ok := body["email"].(string); ok && email != "" && resourceType == "auth" {
-			resourceName = email
-		}
-
-		// 写入 detail
-		if resourceType != "" {
-			detail["resource_type"] = resourceType
-		}
-		if resourceName != "" {
-			detail["resource_name"] = resourceName
-		}
-
-		// 从 URL 提取资源 ID（如 /api/devices/xxx）
+		action, resourceType := resolveAction(routeKey, method, body)
 		resourcePath := c.Request.URL.Path
-		if id := extractResourceID(resourcePath, resourceType); id != "" {
-			detail["resource_id"] = id
-		}
+		enrichDetail(detail, body, resourceType, resourcePath)
 
-		// 收集用户信息
 		var userID *string
 		if id := GetUserID(c); id != "" {
 			userID = &id
 		}
 
 		auditLog := &model.AuditLog{
-			UserID:     userID,
-			Category:   model.AuditCategoryAPI,
-			Action:     action,
-			Resource:   resourcePath,
-			Detail:     detail,
-			IP:         c.ClientIP(),
-			StatusCode: c.Writer.Status(),
-			LatencyMs:  time.Since(start).Milliseconds(),
-			UserAgent:  c.Request.UserAgent(),
-			CreatedAt:  time.Now(),
+			UserID: userID, Category: model.AuditCategoryAPI, Action: action,
+			Resource: resourcePath, Detail: detail, IP: c.ClientIP(),
+			StatusCode: c.Writer.Status(), LatencyMs: time.Since(start).Milliseconds(),
+			UserAgent: c.Request.UserAgent(), CreatedAt: time.Now(),
 		}
 
-		// 异步写入
 		go func(log *model.AuditLog) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
@@ -160,6 +96,76 @@ func AuditLog(repo *repository.AuditLogRepository) gin.HandlerFunc {
 				)
 			}
 		}(auditLog)
+	}
+}
+
+// readRequestBody 读取并缓存请求体
+func readRequestBody(c *gin.Context) map[string]any {
+	if c.Request.Body == nil {
+		return nil
+	}
+	bodyBytes, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		logger.Log.Warn("审计日志: 读取请求体失败", zap.Error(err))
+		return nil
+	}
+	c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+	if len(bodyBytes) > 10240 {
+		return nil
+	}
+	var body map[string]any
+	if err := json.Unmarshal(bodyBytes, &body); err != nil {
+		return nil
+	}
+	return body
+}
+
+// sanitizeBody 脱敏请求体中的敏感字段
+func sanitizeBody(body map[string]any) map[string]any {
+	detail := make(map[string]any, len(body))
+	for k, v := range body {
+		if sensitiveFields[k] {
+			detail[k] = "***"
+		} else {
+			detail[k] = v
+		}
+	}
+	return detail
+}
+
+// resolveAction 解析路由生成可读的 action 和 resource_type
+func resolveAction(routeKey, method string, body map[string]any) (string, string) {
+	action := routeKey
+	resourceType := ""
+	if mapped, ok := actionMap[routeKey]; ok {
+		action = mapped.Action
+		resourceType = mapped.ResourceType
+	}
+	if resourceType == "scheduled_task" && method == "PUT" {
+		if enabled, ok := body["enabled"].(bool); ok {
+			if enabled {
+				action = "启用定时任务"
+			} else {
+				action = "禁用定时任务"
+			}
+		}
+	}
+	return action, resourceType
+}
+
+// enrichDetail 向 detail 中补充资源信息
+func enrichDetail(detail map[string]any, body map[string]any, resourceType, resourcePath string) {
+	if name, ok := body["name"].(string); ok && name != "" {
+		detail["resource_name"] = name
+	}
+	if email, ok := body["email"].(string); ok && email != "" && resourceType == "auth" {
+		detail["resource_name"] = email
+	}
+	if resourceType != "" {
+		detail["resource_type"] = resourceType
+	}
+	if id := extractResourceID(resourcePath, resourceType); id != "" {
+		detail["resource_id"] = id
 	}
 }
 

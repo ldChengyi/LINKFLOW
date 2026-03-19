@@ -184,6 +184,39 @@ func (h *DeviceHandler) Delete(c *gin.Context) {
 	Success(c, nil)
 }
 
+// parseTimeRange 从查询参数解析时间范围（默认最近 1 小时）
+func parseTimeRange(c *gin.Context) (time.Time, time.Time) {
+	end := time.Now()
+	start := end.Add(-1 * time.Hour)
+	if s := c.Query("start"); s != "" {
+		if t, err := time.Parse(time.RFC3339, s); err == nil {
+			start = t
+		}
+	}
+	if e := c.Query("end"); e != "" {
+		if t, err := time.Parse(time.RFC3339, e); err == nil {
+			end = t
+		}
+	}
+	return start, end
+}
+
+// selectAggregationInterval 根据时长自动选择聚合粒度
+func selectAggregationInterval(d time.Duration) string {
+	switch {
+	case d <= 2*time.Hour:
+		return ""
+	case d <= 12*time.Hour:
+		return "5 minutes"
+	case d <= 48*time.Hour:
+		return "15 minutes"
+	case d <= 7*24*time.Hour:
+		return "1 hour"
+	default:
+		return "6 hours"
+	}
+}
+
 // History 获取设备历史遥测数据（根据时间范围自动选择聚合粒度）
 func (h *DeviceHandler) History(c *gin.Context) {
 	ctx, err := h.withRLS(c)
@@ -199,36 +232,8 @@ func (h *DeviceHandler) History(c *gin.Context) {
 		return
 	}
 
-	end := time.Now()
-	start := end.Add(-1 * time.Hour)
-	if s := c.Query("start"); s != "" {
-		if t, err := time.Parse(time.RFC3339, s); err == nil {
-			start = t
-		}
-	}
-	if e := c.Query("end"); e != "" {
-		if t, err := time.Parse(time.RFC3339, e); err == nil {
-			end = t
-		}
-	}
-
-	duration := end.Sub(start)
-
-	// 根据时长自动选择聚合粒度
-	// ≤2h → 原始数据; ≤12h → 5min; ≤48h → 15min; ≤7d → 1h; >7d → 6h
-	var interval string
-	switch {
-	case duration <= 2*time.Hour:
-		interval = "" // 原始数据
-	case duration <= 12*time.Hour:
-		interval = "5 minutes"
-	case duration <= 48*time.Hour:
-		interval = "15 minutes"
-	case duration <= 7*24*time.Hour:
-		interval = "1 hour"
-	default:
-		interval = "6 hours"
-	}
+	start, end := parseTimeRange(c)
+	interval := selectAggregationInterval(end.Sub(start))
 
 	if interval == "" {
 		limit, _ := strconv.Atoi(c.DefaultQuery("limit", "200"))
@@ -241,11 +246,7 @@ func (h *DeviceHandler) History(c *gin.Context) {
 			Fail(c, http.StatusInternalServerError, "failed to get history data")
 			return
 		}
-		Success(c, gin.H{
-			"aggregated": false,
-			"interval":   "",
-			"data":       data,
-		})
+		Success(c, gin.H{"aggregated": false, "interval": "", "data": data})
 		return
 	}
 
@@ -255,11 +256,7 @@ func (h *DeviceHandler) History(c *gin.Context) {
 		Fail(c, http.StatusInternalServerError, "failed to get history data")
 		return
 	}
-	Success(c, gin.H{
-		"aggregated": true,
-		"interval":   interval,
-		"data":       aggData,
-	})
+	Success(c, gin.H{"aggregated": true, "interval": interval, "data": aggData})
 }
 
 // ExportCSV 导出设备历史数据为 CSV
@@ -277,18 +274,7 @@ func (h *DeviceHandler) ExportCSV(c *gin.Context) {
 		return
 	}
 
-	end := time.Now()
-	start := end.Add(-1 * time.Hour)
-	if s := c.Query("start"); s != "" {
-		if t, err2 := time.Parse(time.RFC3339, s); err2 == nil {
-			start = t
-		}
-	}
-	if e := c.Query("end"); e != "" {
-		if t, err2 := time.Parse(time.RFC3339, e); err2 == nil {
-			end = t
-		}
-	}
+	start, end := parseTimeRange(c)
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "1000"))
 	if limit < 1 || limit > 5000 {
 		limit = 1000
@@ -301,25 +287,16 @@ func (h *DeviceHandler) ExportCSV(c *gin.Context) {
 		return
 	}
 
-	// 收集所有 payload key
-	keySet := make(map[string]struct{})
-	for _, d := range data {
-		for k := range d.Payload {
-			keySet[k] = struct{}{}
-		}
-	}
-	keys := make([]string, 0, len(keySet))
-	for k := range keySet {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
+	keys := collectPayloadKeys(data)
 
-	// 写 CSV
 	var buf bytes.Buffer
 	w := csv.NewWriter(&buf)
 
 	header := append([]string{"time", "valid"}, keys...)
-	w.Write(header)
+	if err := w.Write(header); err != nil {
+		Fail(c, http.StatusInternalServerError, "failed to write CSV header")
+		return
+	}
 
 	for _, d := range data {
 		row := make([]string, 0, len(header))
@@ -331,14 +308,37 @@ func (h *DeviceHandler) ExportCSV(c *gin.Context) {
 				row = append(row, "")
 			}
 		}
-		w.Write(row)
+		if err := w.Write(row); err != nil {
+			Fail(c, http.StatusInternalServerError, "failed to write CSV row")
+			return
+		}
 	}
 	w.Flush()
+	if err := w.Error(); err != nil {
+		Fail(c, http.StatusInternalServerError, "failed to flush CSV")
+		return
+	}
 
 	filename := fmt.Sprintf("device_%s_%s.csv", id[:8], start.UTC().Format("20060102"))
 	c.Header("Content-Type", "text/csv; charset=utf-8")
 	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
 	c.Data(http.StatusOK, "text/csv; charset=utf-8", buf.Bytes())
+}
+
+// collectPayloadKeys 收集所有 payload key 并排序
+func collectPayloadKeys(data []repository.DeviceHistoryData) []string {
+	keySet := make(map[string]struct{})
+	for _, d := range data {
+		for k := range d.Payload {
+			keySet[k] = struct{}{}
+		}
+	}
+	keys := make([]string, 0, len(keySet))
+	for k := range keySet {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // LatestData 获取设备最新遥测数据

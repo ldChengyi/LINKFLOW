@@ -52,29 +52,39 @@ func (h *Hub) Run() {
 	for {
 		select {
 		case client := <-h.register:
-			h.mu.Lock()
-			if h.clients[client.userID] == nil {
-				h.clients[client.userID] = make(map[*Client]bool)
-			}
-			h.clients[client.userID][client] = true
-			h.mu.Unlock()
-			logger.Log.Infof("WS client connected: user_id=%s", client.userID)
-
+			h.addClient(client)
 		case client := <-h.unregister:
-			h.mu.Lock()
-			if conns, ok := h.clients[client.userID]; ok {
-				if _, exists := conns[client]; exists {
-					delete(conns, client)
-					close(client.send)
-					if len(conns) == 0 {
-						delete(h.clients, client.userID)
-					}
-				}
-			}
-			h.mu.Unlock()
-			logger.Log.Infof("WS client disconnected: user_id=%s", client.userID)
+			h.removeClient(client)
 		}
 	}
+}
+
+func (h *Hub) addClient(client *Client) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.clients[client.userID] == nil {
+		h.clients[client.userID] = make(map[*Client]bool)
+	}
+	h.clients[client.userID][client] = true
+	logger.Log.Infof("WS client connected: user_id=%s", client.userID)
+}
+
+func (h *Hub) removeClient(client *Client) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	conns, ok := h.clients[client.userID]
+	if !ok {
+		return
+	}
+	if _, exists := conns[client]; !exists {
+		return
+	}
+	delete(conns, client)
+	close(client.send)
+	if len(conns) == 0 {
+		delete(h.clients, client.userID)
+	}
+	logger.Log.Infof("WS client disconnected: user_id=%s", client.userID)
 }
 
 // SendToUser 向指定用户的所有连接推送消息
@@ -119,10 +129,11 @@ func (c *Client) readPump() {
 		c.conn.Close()
 	}()
 	c.conn.SetReadLimit(maxMessageSize)
-	c.conn.SetReadDeadline(time.Now().Add(pongWait))
+	if err := c.conn.SetReadDeadline(time.Now().Add(pongWait)); err != nil {
+		return
+	}
 	c.conn.SetPongHandler(func(string) error {
-		c.conn.SetReadDeadline(time.Now().Add(pongWait))
-		return nil
+		return c.conn.SetReadDeadline(time.Now().Add(pongWait))
 	})
 	for {
 		_, _, err := c.conn.ReadMessage()
@@ -142,16 +153,20 @@ func (c *Client) writePump() {
 	for {
 		select {
 		case message, ok := <-c.send:
-			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
+			if err := c.conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
+				return
+			}
 			if !ok {
-				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
+				_ = c.conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
 			if err := c.conn.WriteMessage(websocket.TextMessage, message); err != nil {
 				return
 			}
 		case <-ticker.C:
-			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
+			if err := c.conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
+				return
+			}
 			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 				return
 			}

@@ -93,14 +93,14 @@ export function onWSMessage(listener: WSListener) {
 function WelcomePage({ user, stats }: { user: UserInfo | null; stats: StatsOverview | null }) {
   const statItems = [
     { label: '设备总数', value: stats?.total_devices ?? '--', color: 'text-primary' },
-    { label: '在线设备', value: stats?.online_devices ?? '--', color: 'text-emerald-400' },
+    { label: '在线设备', value: stats?.online_devices ?? '--', color: 'text-green-400' },
     { label: '物模型', value: stats?.total_thing_models ?? '--', color: 'text-blue-400' },
-    { label: '今日告警', value: stats?.today_alerts ?? '--', color: 'text-yellow-400' },
+    { label: '今日告警', value: stats?.today_alerts ?? '--', color: 'text-amber-400' },
   ];
 
   return (
     <div className="flex flex-col items-center justify-center py-20">
-      <div className="p-4 rounded-2xl bg-primary/10 mb-6">
+      <div className="p-4 rounded-xl bg-primary/10 mb-6">
         <Leaf className="h-12 w-12 text-primary" />
       </div>
       <h2 className="text-3xl font-bold mb-2">欢迎使用 LinkFlow</h2>
@@ -351,13 +351,13 @@ export default function Dashboard() {
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
-                <DropdownMenuItem onClick={() => setTheme('green')} className={theme === 'green' ? 'text-primary' : ''}>
-                  <span className="inline-block w-3 h-3 rounded-full bg-[#22c55e] mr-2" />
-                  翠绿主题
+                <DropdownMenuItem onClick={() => setTheme('dark')} className={theme === 'dark' ? 'text-primary' : ''}>
+                  <span className="inline-block w-3 h-3 rounded-full bg-[#27272a] border border-zinc-600 mr-2" />
+                  深色主题
                 </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => setTheme('blue')} className={theme === 'blue' ? 'text-primary' : ''}>
-                  <span className="inline-block w-3 h-3 rounded-full bg-[#38bdf8] mr-2" />
-                  天蓝主题
+                <DropdownMenuItem onClick={() => setTheme('light')} className={theme === 'light' ? 'text-primary' : ''}>
+                  <span className="inline-block w-3 h-3 rounded-full bg-[#f4f4f5] border border-zinc-300 mr-2" />
+                  浅色主题
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>

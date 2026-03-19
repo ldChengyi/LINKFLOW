@@ -117,7 +117,11 @@ func (h *VoiceHandler) reply(deviceID string, result *model.VoiceResult) {
 	}
 
 	topic := fmt.Sprintf("devices/%s/voice/down", deviceID)
-	payload, _ := json.Marshal(result)
+	payload, err := json.Marshal(result)
+	if err != nil {
+		logger.Log.Errorf("Voice: failed to marshal reply: device_id=%s, err=%v", deviceID, err)
+		return
+	}
 	if err := h.broker.Publish(topic, payload, false, 1); err != nil {
 		logger.Log.Errorf("Voice: failed to reply: device_id=%s, err=%v", deviceID, err)
 	}
@@ -254,84 +258,109 @@ func (h *VoiceHandler) handleWithDify(ctx context.Context, deviceID, text string
 func (h *VoiceHandler) executeDifyCommand(ctx context.Context, deviceID, userID string, device *model.Device, cmd *ai.DifyCommand) *model.VoiceResult {
 	switch cmd.Action {
 	case "set_property":
-		if cmd.PropertyID == "" || cmd.Value == nil {
-			return &model.VoiceResult{Success: false, Message: "AI 返回的属性设置参数不完整"}
-		}
-
-		topic := fmt.Sprintf("devices/%s/telemetry/down", deviceID)
-		payload, _ := json.Marshal(map[string]any{cmd.PropertyID: cmd.Value})
-
-		if err := h.broker.Publish(topic, payload, false, 1); err != nil {
-			return &model.VoiceResult{Success: false, Message: "指令下发失败"}
-		}
-
-		// 仅模拟设备才直接写入 device_data；真实 MQTT 连接的设备会自行通过 telemetry/up 回传
-		if userID != "" && !h.broker.IsClientConnected(deviceID) {
-			merged := map[string]any{cmd.PropertyID: cmd.Value}
-			if existing, err := h.broker.deviceDataRepo.GetLatestData(ctx, deviceID); err == nil && existing != nil {
-				for k, v := range existing.Payload {
-					if _, set := merged[k]; !set {
-						merged[k] = v
-					}
-				}
-			}
-			storeTopic := fmt.Sprintf("devices/%s/telemetry/up", deviceID)
-			_ = h.broker.deviceDataRepo.InsertTelemetry(ctx, deviceID, userID, storeTopic, merged, 1, true, nil)
-		}
-
-		action := fmt.Sprintf("设置 %s.%s = %v", device.Name, cmd.PropertyID, cmd.Value)
-		logger.Log.Infof("Voice Dify executed: %s", action)
-		msg := cmd.Message
-		if msg == "" {
-			msg = "指令已执行"
-		}
-		return &model.VoiceResult{Success: true, Message: msg, Action: action}
-
+		return h.executeSetProperty(ctx, deviceID, userID, device, cmd)
 	case "invoke_service":
-		if cmd.ServiceID == "" {
-			return &model.VoiceResult{Success: false, Message: "AI 返回的服务调用参数不完整"}
-		}
-
-		params := cmd.Params
-		if params == nil {
-			params = map[string]any{}
-		}
-
-		topic := fmt.Sprintf("devices/%s/service/invoke", deviceID)
-		payload, _ := json.Marshal(map[string]any{
-			"id":      fmt.Sprintf("dify_%d", time.Now().UnixMilli()),
-			"service": cmd.ServiceID,
-			"params":  params,
-		})
-
-		if err := h.broker.Publish(topic, payload, false, 1); err != nil {
-			return &model.VoiceResult{Success: false, Message: "服务调用失败"}
-		}
-
-		action := fmt.Sprintf("调用 %s.%s", device.Name, cmd.ServiceID)
-		logger.Log.Infof("Voice Dify executed: %s", action)
-		msg := cmd.Message
-		if msg == "" {
-			msg = "服务已调用"
-		}
-		return &model.VoiceResult{Success: true, Message: msg, Action: action}
-
+		return h.executeInvokeService(deviceID, device, cmd)
 	case "query_status":
-		if cmd.PropertyID == "" {
-			return &model.VoiceResult{Success: false, Message: "AI 返回的查询参数不完整"}
-		}
-		data, err := h.broker.deviceDataRepo.GetLatestData(ctx, deviceID)
-		if err != nil || data == nil {
-			return &model.VoiceResult{Success: false, Message: "无法获取设备数据"}
-		}
-		val, ok := data.Payload[cmd.PropertyID]
-		if !ok {
-			return &model.VoiceResult{Success: false, Message: fmt.Sprintf("属性 %s 无数据", cmd.PropertyID)}
-		}
-		action := fmt.Sprintf("查询 %s.%s = %v", device.Name, cmd.PropertyID, val)
-		return &model.VoiceResult{Success: true, Message: fmt.Sprintf("%s 当前值: %v", cmd.PropertyID, val), Action: action}
-
+		return h.executeQueryStatus(ctx, deviceID, device, cmd)
 	default:
 		return &model.VoiceResult{Success: false, Message: fmt.Sprintf("未知指令类型: %s", cmd.Action)}
 	}
+}
+
+// executeSetProperty 执行属性设置指令
+func (h *VoiceHandler) executeSetProperty(ctx context.Context, deviceID, userID string, device *model.Device, cmd *ai.DifyCommand) *model.VoiceResult {
+	if cmd.PropertyID == "" || cmd.Value == nil {
+		return &model.VoiceResult{Success: false, Message: "AI 返回的属性设置参数不完整"}
+	}
+
+	topic := fmt.Sprintf("devices/%s/telemetry/down", deviceID)
+	payload, err := json.Marshal(map[string]any{cmd.PropertyID: cmd.Value})
+	if err != nil {
+		return &model.VoiceResult{Success: false, Message: "指令序列化失败"}
+	}
+
+	if err := h.broker.Publish(topic, payload, false, 1); err != nil {
+		return &model.VoiceResult{Success: false, Message: "指令下发失败"}
+	}
+
+	// 仅模拟设备才直接写入 device_data
+	if userID != "" && !h.broker.IsClientConnected(deviceID) {
+		h.writeSimulatedTelemetry(ctx, deviceID, userID, cmd.PropertyID, cmd.Value)
+	}
+
+	action := fmt.Sprintf("设置 %s.%s = %v", device.Name, cmd.PropertyID, cmd.Value)
+	logger.Log.Infof("Voice Dify executed: %s", action)
+	msg := cmd.Message
+	if msg == "" {
+		msg = "指令已执行"
+	}
+	return &model.VoiceResult{Success: true, Message: msg, Action: action}
+}
+
+// writeSimulatedTelemetry 模拟设备写入遥测数据（合并历史属性）
+func (h *VoiceHandler) writeSimulatedTelemetry(ctx context.Context, deviceID, userID, propertyID string, value any) {
+	merged := map[string]any{propertyID: value}
+	if existing, err := h.broker.deviceDataRepo.GetLatestData(ctx, deviceID); err == nil && existing != nil {
+		for k, v := range existing.Payload {
+			if _, set := merged[k]; !set {
+				merged[k] = v
+			}
+		}
+	}
+	storeTopic := fmt.Sprintf("devices/%s/telemetry/up", deviceID)
+	if err := h.broker.deviceDataRepo.InsertTelemetry(ctx, deviceID, userID, storeTopic, merged, 1, true, nil); err != nil {
+		logger.Log.Errorf("Voice: failed to write simulated telemetry: device_id=%s, err=%v", deviceID, err)
+	}
+}
+
+// executeInvokeService 执行服务调用指令
+func (h *VoiceHandler) executeInvokeService(deviceID string, device *model.Device, cmd *ai.DifyCommand) *model.VoiceResult {
+	if cmd.ServiceID == "" {
+		return &model.VoiceResult{Success: false, Message: "AI 返回的服务调用参数不完整"}
+	}
+
+	params := cmd.Params
+	if params == nil {
+		params = map[string]any{}
+	}
+
+	topic := fmt.Sprintf("devices/%s/service/invoke", deviceID)
+	payload, err := json.Marshal(map[string]any{
+		"id":      fmt.Sprintf("dify_%d", time.Now().UnixMilli()),
+		"service": cmd.ServiceID,
+		"params":  params,
+	})
+	if err != nil {
+		return &model.VoiceResult{Success: false, Message: "指令序列化失败"}
+	}
+
+	if err := h.broker.Publish(topic, payload, false, 1); err != nil {
+		return &model.VoiceResult{Success: false, Message: "服务调用失败"}
+	}
+
+	action := fmt.Sprintf("调用 %s.%s", device.Name, cmd.ServiceID)
+	logger.Log.Infof("Voice Dify executed: %s", action)
+	msg := cmd.Message
+	if msg == "" {
+		msg = "服务已调用"
+	}
+	return &model.VoiceResult{Success: true, Message: msg, Action: action}
+}
+
+// executeQueryStatus 执行状态查询指令
+func (h *VoiceHandler) executeQueryStatus(ctx context.Context, deviceID string, device *model.Device, cmd *ai.DifyCommand) *model.VoiceResult {
+	if cmd.PropertyID == "" {
+		return &model.VoiceResult{Success: false, Message: "AI 返回的查询参数不完整"}
+	}
+	data, err := h.broker.deviceDataRepo.GetLatestData(ctx, deviceID)
+	if err != nil || data == nil {
+		return &model.VoiceResult{Success: false, Message: "无法获取设备数据"}
+	}
+	val, ok := data.Payload[cmd.PropertyID]
+	if !ok {
+		return &model.VoiceResult{Success: false, Message: fmt.Sprintf("属性 %s 无数据", cmd.PropertyID)}
+	}
+	action := fmt.Sprintf("查询 %s.%s = %v", device.Name, cmd.PropertyID, val)
+	return &model.VoiceResult{Success: true, Message: fmt.Sprintf("%s 当前值: %v", cmd.PropertyID, val), Action: action}
 }

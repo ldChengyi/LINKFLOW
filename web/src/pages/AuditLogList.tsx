@@ -87,8 +87,8 @@ export default function AuditLogList() {
 
   const statusColor = (code: number) => {
     if (code === 0) return '';
-    if (code < 300) return 'text-emerald-400';
-    if (code < 400) return 'text-yellow-400';
+    if (code < 300) return 'text-green-400';
+    if (code < 400) return 'text-amber-400';
     return 'text-destructive';
   };
 

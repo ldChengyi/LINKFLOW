@@ -39,7 +39,8 @@
 
 | 用途         | 技术                                     |
 | ------------ | ---------------------------------------- |
-| 语音控制     | 本地关键词匹配 NLP（内置于 MQTT Broker） |
+| 语音控制     | 本地关键词匹配 NLP + Dify Workflow（可切换） |
+| TTS 语音合成 | Edge TTS + 豆包声音复刻（Doubao，可切换） |
 | 视频流服务器 | Nginx-RTMP（待开发）                     |
 | 视频转码     | FFmpeg（待开发）                         |
 
@@ -82,29 +83,46 @@ linkflow/
 │   │   ├── ws.go                   # WebSocket 升级处理器
 │   │   ├── alert_rule.go           # 告警规则 CRUD 处理器
 │   │   ├── alert_log.go            # 告警日志查询处理器
+│   │   ├── audit_log.go            # 审计日志查询处理器
 │   │   ├── scheduled_task.go       # 定时任务 CRUD 处理器
-│   │   ├── debug.go                # 设备在线调试处理器（模拟上下线 + 指令下发）
+│   │   ├── scheduled_task_log.go   # 定时任务执行日志查询处理器
+│   │   ├── service_call_log.go     # 服务调用日志查询处理器
+│   │   ├── debug.go                # 设备在线调试处理器（模拟上下线 + 指令下发 + 语音调试）
 │   │   ├── firmware.go             # 固件管理处理器（上传/下载/列表/删除）
-│   │   └── ota_task.go             # OTA升级任务处理器（创建/列表/取消）
+│   │   ├── ota_task.go             # OTA升级任务处理器（创建/列表/取消）
+│   │   ├── settings.go             # 平台设置 CRUD 处理器
+│   │   ├── tts.go                  # TTS 音频下载 + 测试处理器
+│   │   └── response.go             # 统一响应格式
 │   ├── logger/logger.go            # zap 日志封装
 │   ├── middleware/auth.go          # JWT 认证中间件
 │   ├── mqtt/
-│   │   ├── broker.go               # MQTT Broker 生命周期 + WS推送 + 告警缓存
+│   │   ├── broker.go               # MQTT Broker 生命周期 + WS推送 + 告警缓存 + settings缓存
 │   │   ├── auth.go                 # 设备认证 + ACL + 上线WS推送
 │   │   ├── hooks.go                # 连接管理 + 消息处理 + 告警评估
 │   │   ├── validator.go            # 物模型属性校验器
-│   │   └── voice.go                # 语音指令处理器（本地 NLP）
+│   │   ├── voice.go                # 语音指令处理器（本地NLP + Dify路径 + 执行）
+│   │   ├── pipeline.go             # 语音 Pipeline 架构（Node 接口 + Pipeline 执行器）
+│   │   └── voice_nodes.go          # Pipeline 节点（Preprocess/DeviceLoad/IntentClassify/EntityExtract/SlotValidate/Execute）
 │   ├── scheduler/
 │   │   └── scheduler.go            # 定时任务调度引擎（Cron 评估 + MQTT 下发）
 │   ├── ws/
 │   │   └── hub.go                  # WebSocket Hub + Client 管理
+│   ├── ai/
+│   │   └── dify.go                 # Dify Workflow API 调用（CallWorkflow，blocking模式）
+│   ├── tts/
+│   │   ├── service.go              # TTS Service 接口 + TTSSettingsProvider 接口
+│   │   ├── edge.go                 # Edge TTS 实现
+│   │   └── doubao.go               # 豆包声音复刻 TTS 实现（Doubao，含 Edge 降级）
 │   ├── model/
 │   │   ├── user.go                 # 用户模型
 │   │   ├── thing_model.go          # 物模型（属性/事件/服务/模块）
 │   │   ├── device.go               # 设备模型
 │   │   ├── module.go               # 功能模块模型 + 语音指令结构
 │   │   ├── alert.go                # 告警规则 + 告警日志模型
+│   │   ├── audit_log.go            # 审计日志模型
 │   │   ├── scheduled_task.go       # 定时任务模型
+│   │   ├── service_call.go         # 服务调用日志模型
+│   │   ├── settings.go             # 平台设置模型（PlatformSettings + UpdateSettingsRequest）
 │   │   ├── debug_log.go            # 设备调试日志模型
 │   │   └── ota.go                  # 固件 + OTA任务模型
 │   ├── repository/
@@ -115,7 +133,11 @@ linkflow/
 │   │   ├── module.go               # 功能模块数据访问
 │   │   ├── alert_rule.go           # 告警规则数据访问
 │   │   ├── alert_log.go            # 告警日志数据访问
+│   │   ├── audit_log.go            # 审计日志数据访问
 │   │   ├── scheduled_task.go       # 定时任务数据访问
+│   │   ├── scheduled_task_log.go   # 定时任务执行日志数据访问
+│   │   ├── service_call_log.go     # 服务调用日志数据访问
+│   │   ├── settings.go             # 平台设置数据访问（UPSERT）
 │   │   ├── debug_log.go            # 设备调试日志数据访问
 │   │   ├── firmware.go             # 固件数据访问
 │   │   └── ota_task.go             # OTA任务数据访问
@@ -132,12 +154,16 @@ linkflow/
 │   ├── 003_devices_table_rls.sql   # 设备表 + RLS 策略
 │   ├── 004_device_data_hypertable.sql # 遥测数据时序表
 │   ├── 005_modules.sql             # 功能模块表 + 物模型 modules 字段
+│   ├── 006_audit_logs.sql          # 审计日志表
 │   ├── 007_alert_system.sql        # 告警规则表 + 告警日志表 + RLS
 │   ├── 008_scheduled_tasks.sql     # 定时任务表 + RLS
 │   ├── 009_alert_enhancements.sql  # 告警冷却字段 + 告警确认字段
 │   ├── 010_ota_system.sql          # 固件表 + OTA任务表 + RLS + 设备firmware_version字段
-│   ├── 011_platform_settings.sql  # 平台全局设置表（key-value）
-│   └── 012_debug_logs.sql         # 设备调试日志表 + RLS
+│   ├── 011_platform_settings.sql   # 平台全局设置表（key-value）
+│   ├── 011_scheduled_task_logs.sql # 定时任务执行日志表 + RLS
+│   ├── 012_debug_logs.sql          # 设备调试日志表 + RLS
+│   ├── 012_service_call_logs.sql   # 服务调用日志表 + RLS
+│   └── 013_tts_settings.sql        # TTS 配置默认值
 ├── web/                             # 前端项目
 │   ├── src/
 │   │   ├── api/index.ts            # Axios API 客户端
@@ -157,13 +183,16 @@ linkflow/
 │   │   │   ├── AlertRuleList.tsx   # 告警规则管理
 │   │   │   ├── AlertRuleForm.tsx   # 告警规则创建/编辑
 │   │   │   ├── AlertLogList.tsx    # 告警历史（实时新告警推送）
+│   │   │   ├── AuditLogList.tsx    # 审计日志列表
 │   │   │   ├── ScheduledTaskList.tsx # 定时任务列表
 │   │   │   ├── ScheduledTaskForm.tsx # 定时任务创建/编辑
-│   │   │   ├── DeviceDebug.tsx      # 设备在线调试（模拟上下线 + 属性下发 + 服务调用）
+│   │   │   ├── ScheduledTaskLogList.tsx # 定时任务执行历史
+│   │   │   ├── DeviceDebug.tsx      # 设备在线调试（模拟上下线 + 属性下发 + 服务调用 + 语音调试）
 │   │   │   ├── FirmwareList.tsx    # 固件管理（上传/列表/删除）
 │   │   │   ├── OTATaskList.tsx     # OTA升级任务（创建/列表/取消 + 实时进度）
 │   │   │   ├── LandingPage.tsx     # 落地页
-│   │   │   └── Settings.tsx        # 系统设置（语音模式 + Dify 连接配置）
+│   │   │   ├── DocsPage.tsx        # 开发者文档页
+│   │   │   └── Settings.tsx        # 系统设置（语音模式 + Dify 连接 + TTS 配置）
 │   │   ├── App.tsx                 # 路由配置
 │   │   └── main.tsx                # 入口文件
 │   ├── Dockerfile                   # 前端镜像（Nginx）
@@ -177,7 +206,19 @@ linkflow/
 │   ├── setup_integration_test.go    # 集成测试 PG/Redis 初始化（integration tag）
 │   ├── auth_test.go                 # 认证单元测试
 │   ├── jwt_test.go                  # JWT 单元测试
-│   └── auth_integration_test.go     # 认证集成测试（integration tag）
+│   ├── auth_integration_test.go     # 认证集成测试（integration tag）
+│   ├── api_helpers_test.go          # API 测试基础设施（路由初始化 + HTTP 辅助函数）
+│   ├── api_auth_test.go             # 认证 API 测试
+│   ├── api_thing_model_test.go      # 物模型 API 测试
+│   ├── api_device_test.go           # 设备 API 测试
+│   ├── api_device_data_test.go      # 历史遥测数据聚合 API 测试
+│   ├── api_stats_test.go            # 仪表盘统计 API 测试
+│   ├── api_module_test.go           # 功能模块 API 测试
+│   ├── api_alert_test.go            # 告警规则 + 告警日志 API 测试
+│   ├── api_scheduled_task_test.go   # 定时任务 CRUD API 测试
+│   ├── api_ota_test.go              # OTA 固件升级 API 测试
+│   ├── voice_pipeline_test.go       # 语音 Pipeline 单元测试
+│   └── voice_integration_test.go    # 语音集成测试（integration tag）
 ├── testdata/
 │   └── auth_test.json               # 测试账号配置
 ├── .env                              # 环境配置（不提交）
@@ -388,6 +429,43 @@ linkflow/
     - RLS 行级安全：用户只能查看自己的调试日志
     - 前端：DeviceDebug 页面展示调试历史记录
 
+29. **TTS 语音合成**
+    - 双引擎支持：Edge TTS（免费默认）+ 豆包声音复刻（Doubao，需配置 API 密钥）
+    - Doubao 降级策略：未配置或调用失败时自动降级到 Edge TTS
+    - 语音指令执行后通过 TTS 合成语音结果，通过 `voice/down` topic 推送音频 URL
+    - 音频文件本地存储，通过 `GET /api/tts/:filename` 下载
+    - 测试端点：`POST /api/tts/test` 用于调试 TTS 配置
+    - 平台设置页面可切换 TTS 引擎 + 配置豆包参数（app_id/access_key/resource_id/speaker_id）
+
+30. **语音调试端点**
+    - `POST /api/devices/:id/voice-debug`：同步语音指令处理，用于前端调试
+    - 接收文本指令，走完整语音 Pipeline，返回执行结果
+    - 前端 DeviceDebug 页面集成语音调试功能
+
+31. **定时任务执行日志**
+    - 记录每次定时任务执行的详细信息到 `scheduled_task_logs` 表
+    - 记录内容：任务 ID、设备 ID、动作类型、MQTT Topic、Payload、执行状态、错误信息
+    - 后端 API：`GET /api/scheduled-task-logs?device_id=&task_id=&limit=&offset=`
+    - RLS 行级安全
+    - 前端：ScheduledTaskLogList 页面展示执行历史
+
+32. **服务调用日志**
+    - 记录所有服务调用（service/invoke）的请求和响应到 `service_call_logs` 表
+    - 记录内容：设备 ID、服务 ID/名称、请求 ID、输入参数、输出参数、状态、响应码
+    - 后端 API：`GET /api/service-call-logs?device_id=&limit=&offset=`
+    - RLS 行级安全
+    - 前端：通过告警/调试页面查看
+
+33. **平台设置系统**
+    - `platform_settings` 表存储全局配置（key-value 模式）
+    - 支持配置项：语音模式（local/dify）、Dify API 连接、TTS 引擎选择、豆包 TTS 参数
+    - 敏感字段（API Key）GET 时返回掩码，PUT 时掩码值不更新
+    - Broker 缓存 + `SettingsCacheInvalidator` 接口实现缓存失效
+    - 前端：Settings 页面统一管理
+
+34. **开发者文档页**
+    - 前端 DocsPage 页面，展示平台接入文档和 API 说明
+
 ------
 
 ## API 端点
@@ -443,6 +521,15 @@ linkflow/
 | GET    | /api/ota-tasks              | OTA任务列表（?device_id） | 是   |
 | GET    | /api/ota-tasks/:id          | OTA任务详情        | 是   |
 | PUT    | /api/ota-tasks/:id/cancel   | 取消OTA任务        | 是   |
+| GET    | /api/settings               | 获取平台设置       | 是   |
+| PUT    | /api/settings               | 更新平台设置       | 是   |
+| GET    | /api/audit-logs             | 审计日志列表       | 是   |
+| GET    | /api/scheduled-task-logs    | 定时任务执行日志（?device_id&task_id） | 是   |
+| GET    | /api/service-call-logs      | 服务调用日志（?device_id） | 是   |
+| GET    | /api/alert-logs/unread-count | 未读告警数         | 是   |
+| POST   | /api/devices/:id/voice-debug | 语音调试（同步执行） | 是   |
+| POST   | /api/tts/test               | TTS 语音合成测试   | 是   |
+| GET    | /api/tts/:filename          | TTS 音频文件下载   | 否   |
 
 ------
 
@@ -736,6 +823,32 @@ alert_logs (id BIGSERIAL PK, rule_id, user_id, device_id, device_name, property_
 - 前端通知使用 sonner（`toast.success/error`）
 - Broker 内部缓存：`devices` sync.Map 缓存已连接设备信息，`models` sync.Map 缓存物模型属性，`alertRules` sync.Map 缓存告警规则
 - WebSocket Hub 通过 `SendToUser(userID, msg)` 推送消息，Broker 持有 Hub 引用
+
+------
+
+## 代码质量规范
+
+### 函数拆分原则
+- Handler 函数保持主流程清晰，业务逻辑提取为私有方法
+- 单个函数圈复杂度控制在 15 以内，认知复杂度控制在 20 以内
+- 嵌套深度不超过 4 层，超过时提取子函数
+
+### 已应用的拆分模式
+
+| 文件 | 原函数 | 提取的子函数 |
+|------|--------|-------------|
+| `handler/debug.go` | `Debug()` | `validateAgainstThingModel`, `buildMQTTMessage`, `logServiceCall`, `getConnectionType`, `buildDebugLogEntry`, `saveDebugLog`, `echoForSimulated`, `mergePropertyPayload`, `echoServiceReply` |
+| `mqtt/hooks.go` | `checkAlertRules()` | `loadAlertRules`, `buildPropNameMap`, `parseNumericValue`, `evaluateThreshold`, `triggerAlert` |
+| `mqtt/voice.go` | `executeDifyCommand()` | `executeSetProperty`, `executeInvokeService`, `executeQueryStatus`, `writeSimulatedTelemetry` |
+| `middleware/audit.go` | `AuditLog()` | `readRequestBody`, `sanitizeBody`, `resolveAction`, `enrichDetail` |
+| `ws/hub.go` | `Run()` | `addClient`, `removeClient` |
+| `handler/device.go` | `History()` + `ExportCSV()` | `parseTimeRange`, `selectAggregationInterval`, `collectPayloadKeys` |
+
+### 错误处理规范
+- 关键路径（影响请求响应）：返回 error，由调用方处理并返回 HTTP 错误
+- 非关键路径（日志写入、缓存更新、模拟回传）：`logger.Log.Error()` 记录但不阻断主流程
+- `json.Marshal` / `json.Unmarshal`：关键数据必须检查 error，内部 map 序列化可忽略
+- Repository `Create` 返回值：必须处理 error，不需要返回值时用 `_, err :=`
 
 ------
 

@@ -206,7 +206,7 @@ export default function DeviceData() {
     }));
   }, [historyData, aggHistoryData, historyAggregated, numericProps, historyRange]);
 
-  const COLORS = ['#10b981', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
+  const COLORS = ['#6366f1', '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'];
 
   // 实时遥测数据更新
   useEffect(() => {
@@ -241,7 +241,7 @@ export default function DeviceData() {
               {devices.map((d) => (
                 <SelectItem key={d.id} value={d.id}>
                   <span className="flex items-center gap-2">
-                    <span className={`h-2 w-2 rounded-full ${d.status === 'online' ? 'bg-emerald-400' : 'bg-muted-foreground/40'}`} />
+                    <span className={`h-2 w-2 rounded-full ${d.status === 'online' ? 'bg-green-400' : 'bg-muted-foreground/40'}`} />
                     {d.name}
                   </span>
                 </SelectItem>
@@ -1111,7 +1111,7 @@ function PropertyCard({
 
 function ApiRow({ method, path, desc }: { method: string; path: string; desc: string }) {
   const colors: Record<string, string> = {
-    GET: 'bg-emerald-500/15 text-emerald-400',
+    GET: 'bg-green-500/15 text-green-400',
     PUT: 'bg-amber-500/15 text-amber-400',
     DELETE: 'bg-red-500/15 text-red-400',
     POST: 'bg-blue-500/15 text-blue-400',
@@ -1147,7 +1147,7 @@ function CodeBlock({ json }: { json: unknown }) {
         onClick={handleCopy}
         className="absolute top-2 right-2 p-1.5 rounded-md bg-background/80 border opacity-0 group-hover:opacity-100 transition-opacity"
       >
-        {copied ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5 text-muted-foreground" />}
+        {copied ? <Check className="h-3.5 w-3.5 text-green-400" /> : <Copy className="h-3.5 w-3.5 text-muted-foreground" />}
       </button>
     </div>
   );

@@ -257,125 +257,136 @@ func (h *EventHook) store(deviceID, userID, topic string, payload map[string]int
 
 // checkAlertRules 评估告警规则
 func (h *EventHook) checkAlertRules(deviceID, userID, deviceName, modelID string, payload map[string]interface{}) {
-	// 从缓存获取规则，未命中则查数据库
-	var rules []*model.AlertRule
-	if cached, ok := h.broker.alertRules.Load(deviceID); ok {
-		rules = cached.([]*model.AlertRule)
-	} else {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		var err error
-		rules, err = h.broker.alertRuleRepo.ListEnabledByDeviceID(ctx, deviceID)
-		if err != nil {
-			logger.Log.Errorf("checkAlertRules: load rules failed: device_id=%s, err=%v", deviceID, err)
-			return
-		}
-		h.broker.alertRules.Store(deviceID, rules)
+	rules, err := h.loadAlertRules(deviceID)
+	if err != nil {
+		logger.Log.Errorf("checkAlertRules: load rules failed: device_id=%s, err=%v", deviceID, err)
+		return
 	}
-
 	if len(rules) == 0 {
 		return
 	}
 
-	// 获取物模型属性名映射
-	properties := h.getModelProperties(modelID)
-	propNameMap := make(map[string]string)
-	for _, p := range properties {
-		propNameMap[p.ID] = p.Name
-	}
+	propNameMap := h.buildPropNameMap(modelID)
 
 	for _, rule := range rules {
 		val, ok := payload[rule.PropertyID]
 		if !ok {
 			continue
 		}
-
-		var numVal float64
-		switch v := val.(type) {
-		case float64:
-			numVal = v
-		case json.Number:
-			numVal, _ = v.Float64()
-		case bool:
-			if v {
-				numVal = 1
-			}
-		default:
+		numVal, ok := parseNumericValue(val)
+		if !ok {
 			continue
 		}
-
-		triggered := false
-		switch rule.Operator {
-		case ">":
-			triggered = numVal > rule.Threshold
-		case ">=":
-			triggered = numVal >= rule.Threshold
-		case "<":
-			triggered = numVal < rule.Threshold
-		case "<=":
-			triggered = numVal <= rule.Threshold
-		case "==":
-			triggered = numVal == rule.Threshold
-		case "!=":
-			triggered = numVal != rule.Threshold
-		}
-
-		if !triggered {
+		if !evaluateThreshold(numVal, rule.Operator, rule.Threshold) {
 			continue
 		}
-
-		// 冷却检查：若规则设置了冷却时间且上次触发在冷却期内，跳过
 		if rule.CooldownMinutes > 0 && rule.LastTriggeredAt != nil {
 			if time.Since(*rule.LastTriggeredAt) < time.Duration(rule.CooldownMinutes)*time.Minute {
 				continue
 			}
 		}
-
 		propName := propNameMap[rule.PropertyID]
 		if propName == "" {
 			propName = rule.PropertyID
 		}
-
-		alertLog := &model.AlertLog{
-			RuleID:       rule.ID,
-			UserID:       userID,
-			DeviceID:     deviceID,
-			DeviceName:   deviceName,
-			PropertyID:   rule.PropertyID,
-			PropertyName: propName,
-			Operator:     rule.Operator,
-			Threshold:    rule.Threshold,
-			ActualValue:  numVal,
-			Severity:     rule.Severity,
-			RuleName:     rule.Name,
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		if err := h.broker.alertLogRepo.Create(ctx, alertLog); err != nil {
-			logger.Log.Errorf("checkAlertRules: write alert log failed: %v", err)
-		}
-		cancel()
-
-		// 更新冷却计时（内存缓存 + 异步写 DB）
-		now := time.Now()
-		rule.LastTriggeredAt = &now
-		go func(ruleID string, t time.Time) {
-			ctx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel2()
-			h.broker.alertRuleRepo.UpdateLastTriggeredAt(ctx2, ruleID, t)
-		}(rule.ID, now)
-
-		// WebSocket 推送告警
-		if h.broker.hub != nil {
-			h.broker.hub.SendToUser(userID, &ws.Message{
-				Type: "alert",
-				Data: alertLog,
-			})
-		}
-
-		logger.Log.Warnf("Alert triggered: rule=%s, device=%s, property=%s, value=%.2f %s %.2f",
-			rule.Name, deviceName, rule.PropertyID, numVal, rule.Operator, rule.Threshold)
+		h.triggerAlert(rule, deviceID, userID, deviceName, numVal, propName)
 	}
+}
+
+// loadAlertRules 从缓存或数据库加载告警规则
+func (h *EventHook) loadAlertRules(deviceID string) ([]*model.AlertRule, error) {
+	if cached, ok := h.broker.alertRules.Load(deviceID); ok {
+		return cached.([]*model.AlertRule), nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	rules, err := h.broker.alertRuleRepo.ListEnabledByDeviceID(ctx, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	h.broker.alertRules.Store(deviceID, rules)
+	return rules, nil
+}
+
+// buildPropNameMap 构建属性 ID → 名称映射
+func (h *EventHook) buildPropNameMap(modelID string) map[string]string {
+	properties := h.getModelProperties(modelID)
+	m := make(map[string]string, len(properties))
+	for _, p := range properties {
+		m[p.ID] = p.Name
+	}
+	return m
+}
+
+// parseNumericValue 从 interface{} 提取数值
+func parseNumericValue(val interface{}) (float64, bool) {
+	switch v := val.(type) {
+	case float64:
+		return v, true
+	case json.Number:
+		f, err := v.Float64()
+		return f, err == nil
+	case bool:
+		if v {
+			return 1, true
+		}
+		return 0, true
+	default:
+		return 0, false
+	}
+}
+
+// evaluateThreshold 判断数值是否触发阈值
+func evaluateThreshold(val float64, operator string, threshold float64) bool {
+	switch operator {
+	case ">":
+		return val > threshold
+	case ">=":
+		return val >= threshold
+	case "<":
+		return val < threshold
+	case "<=":
+		return val <= threshold
+	case "==":
+		return val == threshold
+	case "!=":
+		return val != threshold
+	default:
+		return false
+	}
+}
+
+// triggerAlert 写入告警日志、更新冷却、推送 WebSocket
+func (h *EventHook) triggerAlert(rule *model.AlertRule, deviceID, userID, deviceName string, numVal float64, propName string) {
+	alertLog := &model.AlertLog{
+		RuleID: rule.ID, UserID: userID, DeviceID: deviceID, DeviceName: deviceName,
+		PropertyID: rule.PropertyID, PropertyName: propName,
+		Operator: rule.Operator, Threshold: rule.Threshold, ActualValue: numVal,
+		Severity: rule.Severity, RuleName: rule.Name,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := h.broker.alertLogRepo.Create(ctx, alertLog); err != nil {
+		logger.Log.Errorf("checkAlertRules: write alert log failed: %v", err)
+	}
+	cancel()
+
+	now := time.Now()
+	rule.LastTriggeredAt = &now
+	go func(ruleID string, t time.Time) {
+		ctx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel2()
+		if err := h.broker.alertRuleRepo.UpdateLastTriggeredAt(ctx2, ruleID, t); err != nil {
+			logger.Log.Errorf("checkAlertRules: update cooldown failed: rule=%s, err=%v", ruleID, err)
+		}
+	}(rule.ID, now)
+
+	if h.broker.hub != nil {
+		h.broker.hub.SendToUser(userID, &ws.Message{Type: "alert", Data: alertLog})
+	}
+
+	logger.Log.Warnf("Alert triggered: rule=%s, device=%s, property=%s, value=%.2f %s %.2f",
+		rule.Name, deviceName, rule.PropertyID, numVal, rule.Operator, rule.Threshold)
 }
 
 // handleOTAProgress 处理设备 OTA 进度上报

@@ -159,7 +159,7 @@ export default function AlertLogList({ onAcknowledge }: AlertLogListProps = {}) 
                     <TableCell>
                       {item.acknowledged ? (
                         <div className="flex items-center gap-1 text-muted-foreground text-xs">
-                          <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
+                          <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />
                           已确认
                         </div>
                       ) : (

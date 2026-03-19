@@ -77,7 +77,7 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
 
 function ApiTable({ rows }: { rows: { method: string; path: string; desc: string; auth?: boolean }[] }) {
   const methodColor: Record<string, string> = {
-    GET: '#22c55e', POST: '#3b82f6', PUT: '#f59e0b', DELETE: '#ef4444',
+    GET: '#10b981', POST: '#3b82f6', PUT: '#f59e0b', DELETE: '#ef4444',
   };
   return (
     <div style={{ border: '1px solid var(--color-border)', borderRadius: 10, overflow: 'hidden' }}>
@@ -153,7 +153,7 @@ function TopicTable({ rows }: { rows: { topic: string; dir: string; desc: string
                   display: 'inline-block', padding: '2px 8px', borderRadius: 4,
                   fontSize: 11, fontWeight: 600,
                   ...(row.dir === '设备→云端'
-                    ? { color: '#22c55e', background: '#22c55e1a' }
+                    ? { color: '#10b981', background: '#10b9811a' }
                     : { color: '#3b82f6', background: '#3b82f61a' }),
                 }}>{row.dir}</span>
               </td>

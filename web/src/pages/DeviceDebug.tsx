@@ -38,7 +38,6 @@ export default function DeviceDebug() {
   const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [voiceText, setVoiceText] = useState('');
   const [voiceSending, setVoiceSending] = useState(false);
-  const [voiceResults, setVoiceResults] = useState<Array<{ text: string; result: { success: boolean; message: string; action?: string; audio_url?: string }; time: string }>>([]);
 
   // 模拟上线心跳：每 2 分钟续期，停止时清理
   useEffect(() => {
@@ -82,11 +81,7 @@ export default function DeviceDebug() {
         fetchConnectionType(selectedId);
       }
       if (msg.type === 'voice_down' && msg.data?.device_id === selectedId) {
-        setVoiceResults((prev) => [{
-          text: msg.data.text || '',
-          result: { success: msg.data.success, message: msg.data.message, action: msg.data.action, audio_url: msg.data.audio_url },
-          time: new Date().toISOString(),
-        }, ...prev].slice(0, 20));
+        fetchDebugLogs(selectedId);
       }
     });
   }, [selectedId]);
@@ -117,7 +112,6 @@ export default function DeviceDebug() {
     setDebugLogs([]);
     setLogsPage(1);
     setVoiceText('');
-    setVoiceResults([]);
     try {
       const [devRes, dataRes, connRes] = await Promise.all([
         deviceApi.get(id),
@@ -158,21 +152,27 @@ export default function DeviceDebug() {
   const isOnline = connType !== 'offline';
   const isReal = connType === 'real';
 
+  const convertPropValue = (dataType: string, val: unknown): unknown => {
+    if (dataType === 'bool') return val ?? false;
+    if (val === undefined || String(val) === '') return undefined;
+    if (dataType === 'int' || dataType === 'enum') return parseInt(String(val), 10);
+    if (dataType === 'float') return parseFloat(String(val));
+    return val;
+  };
+
+  const buildPropertyPayload = (): Record<string, unknown> => {
+    const properties: Record<string, unknown> = {};
+    for (const prop of rwProps) {
+      const converted = convertPropValue(prop.dataType, propValues[prop.id]);
+      if (converted !== undefined) properties[prop.id] = converted;
+    }
+    return properties;
+  };
+
   const handleAllPropertySet = async () => {
     setSending('__all__');
     try {
-      const properties: Record<string, unknown> = {};
-      for (const prop of rwProps) {
-        const val = propValues[prop.id];
-        if (prop.dataType === 'bool') {
-          properties[prop.id] = val ?? false;
-        } else if (val !== undefined && String(val) !== '') {
-          if (prop.dataType === 'int') properties[prop.id] = parseInt(String(val), 10);
-          else if (prop.dataType === 'float') properties[prop.id] = parseFloat(String(val));
-          else if (prop.dataType === 'enum') properties[prop.id] = parseInt(String(val), 10);
-          else properties[prop.id] = val;
-        }
-      }
+      const properties = buildPropertyPayload();
       if (Object.keys(properties).length === 0) {
         toast.error('请至少设置一个属性值');
         return;
@@ -234,12 +234,13 @@ export default function DeviceDebug() {
     try {
       const res = await deviceApi.voiceDebug(selectedId, text);
       const d = res.data;
-      setVoiceResults((prev) => [{
-        text,
-        result: { success: d.success, message: d.message, action: d.action, audio_url: d.audio_url },
-        time: new Date().toISOString(),
-      }, ...prev].slice(0, 20));
+      if (d.success) {
+        toast.success(d.message || '语音指令执行成功');
+      } else {
+        toast.error(d.message || '语音指令执行失败');
+      }
       setVoiceText('');
+      fetchDebugLogs(selectedId);
     } catch (e: unknown) {
       const msg = (e as { response?: { data?: { msg?: string } } })?.response?.data?.msg || '发送失败';
       toast.error(msg);
@@ -321,7 +322,7 @@ export default function DeviceDebug() {
                 {devices.map((d) => (
                   <SelectItem key={d.id} value={d.id}>
                     <span className="flex items-center gap-2">
-                      <span className={`h-2 w-2 rounded-full ${d.status === 'online' ? 'bg-emerald-500' : 'bg-gray-400'}`} />
+                      <span className={`h-2 w-2 rounded-full ${d.status === 'online' ? 'bg-green-500' : 'bg-gray-400'}`} />
                       {d.name}
                     </span>
                   </SelectItem>
@@ -362,8 +363,8 @@ export default function DeviceDebug() {
           <TabsList>
             <TabsTrigger value="properties">属性设置</TabsTrigger>
             <TabsTrigger value="services">服务调用</TabsTrigger>
-            <TabsTrigger value="history">调试历史</TabsTrigger>
             {hasVoiceModule && <TabsTrigger value="voice">语音调试</TabsTrigger>}
+            <TabsTrigger value="history">调试历史</TabsTrigger>
           </TabsList>
 
           {isReal && (
@@ -442,6 +443,82 @@ export default function DeviceDebug() {
             )}
           </TabsContent>
 
+          {hasVoiceModule && (
+            <TabsContent value="voice" className="space-y-4">
+              <Card>
+                <CardHeader><CardTitle className="text-base flex items-center gap-2"><Mic className="h-4 w-4" />语音指令调试</CardTitle></CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="flex items-center gap-3">
+                    <Input
+                      className="flex-1"
+                      placeholder="输入语音指令文本，如：打开灯、调高亮度、设置温度到25"
+                      value={voiceText}
+                      onChange={(e) => setVoiceText(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter' && !voiceSending) handleVoiceSend(); }}
+                    />
+                    <Button onClick={handleVoiceSend} disabled={voiceSending || !voiceText.trim()}>
+                      {voiceSending ? <Spinner className="h-4 w-4 mr-2" /> : <Send className="h-4 w-4 mr-2" />}
+                      发送
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    通过 voice/up topic 发送文本指令，经语音处理链路（本地 NLP / Dify）解析并执行，结果通过 voice/down 实时返回
+                  </p>
+                </CardContent>
+              </Card>
+
+              {(() => {
+                const voiceLogs = debugLogs.filter((l) => l.action_type === 'voice_command');
+                return voiceLogs.length > 0 ? (
+                  <Card>
+                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
+                      <CardTitle className="text-base flex items-center gap-2">
+                        <History className="h-4 w-4" />
+                        语音调试历史
+                      </CardTitle>
+                      <Button size="sm" variant="outline" onClick={() => fetchDebugLogs(selectedId)} disabled={loadingLogs}>
+                        <RefreshCw className={`h-4 w-4 ${loadingLogs ? 'animate-spin' : ''}`} />
+                      </Button>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="space-y-2 max-h-96 overflow-y-auto">
+                        {voiceLogs.map((log) => (
+                          <div key={log.id} className="border rounded-lg p-3 text-sm space-y-1">
+                            <div className="flex items-center justify-between">
+                              <Badge variant={log.success ? 'default' : 'destructive'}>
+                                {log.success ? '成功' : '失败'}
+                              </Badge>
+                              <span className="text-xs text-muted-foreground">
+                                {new Date(log.created_at).toLocaleString('zh-CN')}
+                              </span>
+                            </div>
+                            <div className="font-mono text-xs bg-muted p-2 rounded">
+                              <span className="text-muted-foreground">指令: </span>
+                              {String((log.request as Record<string, unknown>)?.text ?? '') || JSON.stringify(log.request)}
+                            </div>
+                            {log.response && (
+                              <div className="text-muted-foreground text-xs">
+                                {String((log.response as Record<string, unknown>)?.message ?? '') || JSON.stringify(log.response)}
+                              </div>
+                            )}
+                            {log.response && !!(log.response as Record<string, unknown>)?.action && (
+                              <div className="font-mono text-xs bg-muted p-2 rounded">
+                                {String((log.response as Record<string, unknown>).action)}
+                              </div>
+                            )}
+                            {log.error_message && (
+                              <div className="text-destructive text-xs">{log.error_message}</div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </CardContent>
+                  </Card>
+                ) : null;
+              })()}
+            </TabsContent>
+          )}
+
           <TabsContent value="history" className="space-y-4">
             <Card>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
@@ -510,61 +587,6 @@ export default function DeviceDebug() {
               </CardContent>
             </Card>
           </TabsContent>
-
-          {hasVoiceModule && (
-            <TabsContent value="voice" className="space-y-4">
-              <Card>
-                <CardHeader><CardTitle className="text-base flex items-center gap-2"><Mic className="h-4 w-4" />语音指令调试</CardTitle></CardHeader>
-                <CardContent className="space-y-4">
-                  <div className="flex items-center gap-3">
-                    <Input
-                      className="flex-1"
-                      placeholder="输入语音指令文本，如：打开灯、调高亮度、设置温度到25"
-                      value={voiceText}
-                      onChange={(e) => setVoiceText(e.target.value)}
-                      onKeyDown={(e) => { if (e.key === 'Enter' && !voiceSending) handleVoiceSend(); }}
-                    />
-                    <Button onClick={handleVoiceSend} disabled={voiceSending || !voiceText.trim()}>
-                      {voiceSending ? <Spinner className="h-4 w-4 mr-2" /> : <Send className="h-4 w-4 mr-2" />}
-                      发送
-                    </Button>
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    通过 voice/up topic 发送文本指令，经语音处理链路（本地 NLP / Dify）解析并执行，结果通过 voice/down 实时返回
-                  </p>
-                </CardContent>
-              </Card>
-
-              {voiceResults.length > 0 && (
-                <Card>
-                  <CardHeader><CardTitle className="text-base">执行结果</CardTitle></CardHeader>
-                  <CardContent>
-                    <div className="space-y-2 max-h-96 overflow-y-auto">
-                      {voiceResults.map((item, idx) => (
-                        <div key={idx} className="border rounded-lg p-3 text-sm space-y-1">
-                          <div className="flex items-center justify-between">
-                            <Badge variant={item.result.success ? 'default' : 'destructive'}>
-                              {item.result.success ? '成功' : '失败'}
-                            </Badge>
-                            <span className="text-xs text-muted-foreground">
-                              {new Date(item.time).toLocaleString('zh-CN')}
-                            </span>
-                          </div>
-                          <div className="text-muted-foreground">{item.result.message}</div>
-                          {item.result.action && (
-                            <div className="font-mono text-xs bg-muted p-2 rounded">{item.result.action}</div>
-                          )}
-                          {item.result.audio_url && (
-                            <audio controls src={item.result.audio_url} className="w-full h-8 mt-1" />
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </CardContent>
-                </Card>
-              )}
-            </TabsContent>
-          )}
         </Tabs>
       )}
     </div>

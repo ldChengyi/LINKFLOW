@@ -12,8 +12,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/ldchengyi/linkflow/internal/cache"
 	"github.com/ldchengyi/linkflow/internal/database"
+	"github.com/ldchengyi/linkflow/internal/logger"
 	"github.com/ldchengyi/linkflow/internal/model"
 	"github.com/ldchengyi/linkflow/internal/repository"
+	"go.uber.org/zap"
 )
 
 type MQTTPublisher interface {
@@ -125,11 +127,7 @@ func (h *DebugHandler) VoiceDebug(c *gin.Context) {
 	result := h.voiceProcessor.ProcessCommand(deviceID, req.Text)
 
 	// 判断连接类型
-	realConn := h.publisher.IsClientConnected(deviceID)
-	connType := "simulated"
-	if realConn {
-		connType = "real"
-	}
+	connType := h.getConnectionType(deviceID)
 
 	// 记录调试日志
 	userID := c.GetString("user_id")
@@ -146,9 +144,7 @@ func (h *DebugHandler) VoiceDebug(c *gin.Context) {
 	if !result.Success {
 		debugLog.ErrorMessage = result.Message
 	}
-	if h.debugLogRepo != nil {
-		h.debugLogRepo.Create(context.Background(), debugLog)
-	}
+	h.saveDebugLog(debugLog)
 
 	Success(c, gin.H{
 		"success":   result.Success,
@@ -179,182 +175,214 @@ func (h *DebugHandler) Debug(c *gin.Context) {
 		return
 	}
 
-	// 必须在线才能调试
 	online, _ := h.rdb.IsDeviceOnline(c.Request.Context(), deviceID)
 	if !online {
 		Fail(c, http.StatusBadRequest, "device is offline")
 		return
 	}
 
-	// Validate property/service if thing model bound
-	if device.ModelID != nil && *device.ModelID != "" {
-		tm, err := h.thingModelRepo.GetByID(ctx, *device.ModelID)
-		if err == nil {
-			if req.ActionType == "property_set" {
-				// 批量模式：校验每个 property_id
-				if len(req.Properties) > 0 {
-					for pid := range req.Properties {
-						if !findProperty(tm.Properties, pid) {
-							Fail(c, http.StatusBadRequest, "property not found in thing model: "+pid)
-							return
-						}
-					}
-				} else if !findProperty(tm.Properties, req.PropertyID) {
-					Fail(c, http.StatusBadRequest, "property not found in thing model")
-					return
-				}
-			} else {
-				if !findService(tm.Services, req.ServiceID) {
-					Fail(c, http.StatusBadRequest, "service not found in thing model")
-					return
-				}
-			}
-		}
+	if err := h.validateAgainstThingModel(ctx, device, &req); err != nil {
+		Fail(c, http.StatusBadRequest, err.Error())
+		return
 	}
 
-	// Build MQTT topic + payload
-	var topic string
-	var payload []byte
-
-	switch req.ActionType {
-	case "property_set":
-		topic = fmt.Sprintf("devices/%s/telemetry/down", deviceID)
-		var data map[string]interface{}
-		if len(req.Properties) > 0 {
-			data = req.Properties
-		} else {
-			data = map[string]interface{}{req.PropertyID: req.Value}
-		}
-		payload, _ = json.Marshal(data)
-	case "service_invoke":
-		topic = fmt.Sprintf("devices/%s/service/invoke", deviceID)
-		requestID := fmt.Sprintf("debug_%s_%d", deviceID[:8], time.Now().Unix())
-		msg := map[string]interface{}{
-			"id":      requestID,
-			"service": req.ServiceID,
-			"params":  req.Value,
-		}
-		payload, _ = json.Marshal(msg)
-
-		// 写入服务调用日志（status=pending）
-		if h.svcCallLogRepo != nil {
-			serviceName := req.ServiceID
-			if device.ModelID != nil && *device.ModelID != "" {
-				if tm, err := h.thingModelRepo.GetByID(ctx, *device.ModelID); err == nil {
-					for _, s := range tm.Services {
-						if s.ID == req.ServiceID {
-							serviceName = s.Name
-							break
-						}
-					}
-				}
-			}
-			inputJSON, _ := json.Marshal(req.Value)
-			userID := c.GetString("user_id")
-			h.svcCallLogRepo.Create(context.Background(), &model.ServiceCallLog{
-				DeviceID:    deviceID,
-				UserID:      userID,
-				DeviceName:  device.Name,
-				ServiceID:   req.ServiceID,
-				ServiceName: serviceName,
-				RequestID:   requestID,
-				InputParams: inputJSON,
-				Status:      "pending",
-			})
-		}
-	}
-
-	// 判断连接类型
-	realConn := h.publisher.IsClientConnected(deviceID)
-	connType := "simulated"
-	if realConn {
-		connType = "real"
-	}
-
-	// 记录调试日志
 	userID := c.GetString("user_id")
-	debugLog := &model.DebugLog{
-		UserID:         userID,
-		DeviceID:       deviceID,
-		DeviceName:     device.Name,
-		ConnectionType: connType,
-		ActionType:     req.ActionType,
-		Request:        make(map[string]interface{}),
-		Success:        true,
+	topic, payload, err := h.buildMQTTMessage(ctx, deviceID, device, &req, userID)
+	if err != nil {
+		Fail(c, http.StatusInternalServerError, "failed to build MQTT message")
+		return
 	}
-	if req.ActionType == "property_set" {
-		if len(req.Properties) > 0 {
-			debugLog.Request["properties"] = req.Properties
-		} else {
-			debugLog.Request["property_id"] = req.PropertyID
-			debugLog.Request["value"] = req.Value
-		}
-	} else {
-		debugLog.Request["service_id"] = req.ServiceID
-		debugLog.Request["params"] = req.Value
-	}
+	connType := h.getConnectionType(deviceID)
+	debugLog := h.buildDebugLogEntry(userID, deviceID, device, connType, &req)
 
 	if err := h.publisher.Publish(topic, payload, false, 1); err != nil {
 		debugLog.Success = false
 		debugLog.ErrorMessage = "failed to publish MQTT message"
-		if h.debugLogRepo != nil {
-			h.debugLogRepo.Create(context.Background(), debugLog)
-		}
+		h.saveDebugLog(debugLog)
 		Fail(c, http.StatusInternalServerError, "failed to publish MQTT message")
 		return
 	}
 
 	debugLog.Response = map[string]interface{}{"topic": topic, "published": true}
-	if h.debugLogRepo != nil {
-		h.debugLogRepo.Create(context.Background(), debugLog)
+	h.saveDebugLog(debugLog)
+
+	autoEcho := connType != "real"
+	if autoEcho {
+		h.echoForSimulated(deviceID, &req, payload)
 	}
 
-	// 仅模拟设备需要自动回传（真实设备由硬件自行回传）
-	if !realConn {
-		switch req.ActionType {
-		case "property_set":
-			upTopic := fmt.Sprintf("devices/%s/telemetry/up", deviceID)
-			// 合并历史 payload，避免回传数据覆盖掉其他属性
-			echoPayload := payload
-			if latest, err := h.dataRepo.GetLatestData(context.Background(), deviceID); err == nil && latest != nil {
-				merged := make(map[string]interface{}, len(latest.Payload)+len(req.Properties)+1)
-				for k, v := range latest.Payload {
-					merged[k] = v
-				}
-				// 覆盖本次下发的属性
-				if len(req.Properties) > 0 {
-					for k, v := range req.Properties {
-						merged[k] = v
-					}
-				} else {
-					merged[req.PropertyID] = req.Value
-				}
-				if mergedJSON, err := json.Marshal(merged); err == nil {
-					echoPayload = mergedJSON
+	Success(c, gin.H{"topic": topic, "payload": json.RawMessage(payload), "auto_echo": autoEcho})
+}
+
+// validateAgainstThingModel 校验属性/服务是否存在于物模型
+func (h *DebugHandler) validateAgainstThingModel(ctx context.Context, device *model.Device, req *DebugRequest) error {
+	if device.ModelID == nil || *device.ModelID == "" {
+		return nil
+	}
+	tm, err := h.thingModelRepo.GetByID(ctx, *device.ModelID)
+	if err != nil {
+		return nil
+	}
+	if req.ActionType == "property_set" {
+		if len(req.Properties) > 0 {
+			for pid := range req.Properties {
+				if !findProperty(tm.Properties, pid) {
+					return fmt.Errorf("property not found in thing model: %s", pid)
 				}
 			}
-			h.publisher.Publish(upTopic, echoPayload, false, 1)
-		case "service_invoke":
-			// 解析 payload 获取 requestID（用于模拟回复中的 id 字段一致性）
-			var invokeMsg map[string]interface{}
-			json.Unmarshal(payload, &invokeMsg)
-			replyID, _ := invokeMsg["id"].(string)
-			if replyID == "" {
-				replyID = fmt.Sprintf("debug_%s_%d", deviceID[:8], time.Now().Unix())
+		} else if !findProperty(tm.Properties, req.PropertyID) {
+			return fmt.Errorf("property not found in thing model")
+		}
+	} else if !findService(tm.Services, req.ServiceID) {
+		return fmt.Errorf("service not found in thing model")
+	}
+	return nil
+}
+
+// buildMQTTMessage 构建 MQTT topic 和 payload，service_invoke 时同步写服务调用日志
+func (h *DebugHandler) buildMQTTMessage(ctx context.Context, deviceID string, device *model.Device, req *DebugRequest, userID string) (string, []byte, error) {
+	switch req.ActionType {
+	case "property_set":
+		topic := fmt.Sprintf("devices/%s/telemetry/down", deviceID)
+		data := req.Properties
+		if len(data) == 0 {
+			data = map[string]interface{}{req.PropertyID: req.Value}
+		}
+		payload, err := json.Marshal(data)
+		if err != nil {
+			return "", nil, fmt.Errorf("marshal property payload: %w", err)
+		}
+		return topic, payload, nil
+	case "service_invoke":
+		topic := fmt.Sprintf("devices/%s/service/invoke", deviceID)
+		requestID := fmt.Sprintf("debug_%s_%d", deviceID[:8], time.Now().Unix())
+		msg := map[string]interface{}{"id": requestID, "service": req.ServiceID, "params": req.Value}
+		payload, err := json.Marshal(msg)
+		if err != nil {
+			return "", nil, fmt.Errorf("marshal service payload: %w", err)
+		}
+		h.logServiceCall(ctx, deviceID, device, req, requestID, userID)
+		return topic, payload, nil
+	default:
+		return "", nil, fmt.Errorf("unsupported action type: %s", req.ActionType)
+	}
+}
+
+// logServiceCall 写入服务调用日志
+func (h *DebugHandler) logServiceCall(ctx context.Context, deviceID string, device *model.Device, req *DebugRequest, requestID, userID string) {
+	if h.svcCallLogRepo == nil {
+		return
+	}
+	serviceName := req.ServiceID
+	if device.ModelID != nil && *device.ModelID != "" {
+		if tm, err := h.thingModelRepo.GetByID(ctx, *device.ModelID); err == nil {
+			for _, s := range tm.Services {
+				if s.ID == req.ServiceID {
+					serviceName = s.Name
+					break
+				}
 			}
-			replyTopic := fmt.Sprintf("devices/%s/service/reply", deviceID)
-			reply := map[string]interface{}{
-				"id":      replyID,
-				"service": req.ServiceID,
-				"code":    200,
-				"message": "success",
-			}
-			replyPayload, _ := json.Marshal(reply)
-			h.publisher.Publish(replyTopic, replyPayload, false, 1)
 		}
 	}
+	inputJSON, _ := json.Marshal(req.Value)
+	if _, err := h.svcCallLogRepo.Create(context.Background(), &model.ServiceCallLog{
+		DeviceID: deviceID, UserID: userID, DeviceName: device.Name,
+		ServiceID: req.ServiceID, ServiceName: serviceName,
+		RequestID: requestID, InputParams: inputJSON, Status: "pending",
+	}); err != nil {
+		logger.Log.Error("failed to save service call log", zap.String("device_id", deviceID), zap.Error(err))
+	}
+}
 
-	Success(c, gin.H{"topic": topic, "payload": json.RawMessage(payload), "auto_echo": !realConn})
+func (h *DebugHandler) getConnectionType(deviceID string) string {
+	if h.publisher.IsClientConnected(deviceID) {
+		return "real"
+	}
+	return "simulated"
+}
+
+// buildDebugLogEntry 构建调试日志条目
+func (h *DebugHandler) buildDebugLogEntry(userID, deviceID string, device *model.Device, connType string, req *DebugRequest) *model.DebugLog {
+	dl := &model.DebugLog{
+		UserID: userID, DeviceID: deviceID, DeviceName: device.Name,
+		ConnectionType: connType, ActionType: req.ActionType,
+		Request: make(map[string]interface{}), Success: true,
+	}
+	if req.ActionType == "property_set" {
+		if len(req.Properties) > 0 {
+			dl.Request["properties"] = req.Properties
+		} else {
+			dl.Request["property_id"] = req.PropertyID
+			dl.Request["value"] = req.Value
+		}
+	} else {
+		dl.Request["service_id"] = req.ServiceID
+		dl.Request["params"] = req.Value
+	}
+	return dl
+}
+
+func (h *DebugHandler) saveDebugLog(dl *model.DebugLog) {
+	if h.debugLogRepo != nil {
+		if err := h.debugLogRepo.Create(context.Background(), dl); err != nil {
+			logger.Log.Error("failed to save debug log", zap.String("device_id", dl.DeviceID), zap.Error(err))
+		}
+	}
+}
+
+// echoForSimulated 模拟设备自动回传（闭合数据链路）
+func (h *DebugHandler) echoForSimulated(deviceID string, req *DebugRequest, payload []byte) {
+	switch req.ActionType {
+	case "property_set":
+		upTopic := fmt.Sprintf("devices/%s/telemetry/up", deviceID)
+		if err := h.publisher.Publish(upTopic, h.mergePropertyPayload(deviceID, req, payload), false, 1); err != nil {
+			logger.Log.Error("failed to echo property payload", zap.String("device_id", deviceID), zap.Error(err))
+		}
+	case "service_invoke":
+		h.echoServiceReply(deviceID, req, payload)
+	}
+}
+
+// mergePropertyPayload 合并历史属性，避免回传覆盖其他属性
+func (h *DebugHandler) mergePropertyPayload(deviceID string, req *DebugRequest, payload []byte) []byte {
+	latest, err := h.dataRepo.GetLatestData(context.Background(), deviceID)
+	if err != nil || latest == nil {
+		return payload
+	}
+	merged := make(map[string]interface{}, len(latest.Payload)+len(req.Properties)+1)
+	for k, v := range latest.Payload {
+		merged[k] = v
+	}
+	if len(req.Properties) > 0 {
+		for k, v := range req.Properties {
+			merged[k] = v
+		}
+	} else {
+		merged[req.PropertyID] = req.Value
+	}
+	if mergedJSON, err := json.Marshal(merged); err == nil {
+		return mergedJSON
+	}
+	return payload
+}
+
+// echoServiceReply 模拟服务调用回复
+func (h *DebugHandler) echoServiceReply(deviceID string, req *DebugRequest, payload []byte) {
+	var invokeMsg map[string]interface{}
+	if err := json.Unmarshal(payload, &invokeMsg); err != nil {
+		logger.Log.Error("failed to unmarshal invoke payload for echo", zap.String("device_id", deviceID), zap.Error(err))
+		return
+	}
+	replyID, _ := invokeMsg["id"].(string)
+	if replyID == "" {
+		replyID = fmt.Sprintf("debug_%s_%d", deviceID[:8], time.Now().Unix())
+	}
+	replyTopic := fmt.Sprintf("devices/%s/service/reply", deviceID)
+	reply := map[string]interface{}{"id": replyID, "service": req.ServiceID, "code": 200, "message": "success"}
+	replyPayload, _ := json.Marshal(reply)
+	if err := h.publisher.Publish(replyTopic, replyPayload, false, 1); err != nil {
+		logger.Log.Error("failed to echo service reply", zap.String("device_id", deviceID), zap.Error(err))
+	}
 }
 
 func findProperty(props []model.Property, id string) bool {

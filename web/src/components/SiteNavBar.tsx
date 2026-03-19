@@ -138,8 +138,8 @@ export default function SiteNavBar({ page }: SiteNavBarProps) {
 
         {/* Theme toggle */}
         <button
-          onClick={() => setTheme(theme === 'green' ? 'blue' : 'green')}
-          title={theme === 'green' ? '切换天蓝主题' : '切换翠绿主题'}
+          onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+          title={theme === 'dark' ? '切换浅色主题' : '切换深色主题'}
           style={{
             width: 34, height: 34, borderRadius: 8,
             border: `1px solid ${WHITE_DIMMER}`,

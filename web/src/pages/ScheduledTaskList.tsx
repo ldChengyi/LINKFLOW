@@ -142,7 +142,7 @@ export default function ScheduledTaskList() {
                       <div className="flex items-center justify-end gap-1">
                         <Button variant="ghost" size="icon" onClick={() => handleToggle(t)}
                           title={t.enabled ? '禁用' : '启用'}>
-                          <Power className={`h-4 w-4 ${t.enabled ? 'text-emerald-400' : 'text-muted-foreground'}`} />
+                          <Power className={`h-4 w-4 ${t.enabled ? 'text-green-400' : 'text-muted-foreground'}`} />
                         </Button>
                         <Button variant="ghost" size="icon" onClick={() => navigate(`/scheduled-tasks/${t.id}/edit`)}>
                           <Pencil className="h-4 w-4" />

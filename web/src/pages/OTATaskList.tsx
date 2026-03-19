@@ -21,8 +21,8 @@ const statusMap: Record<string, { label: string; color: string }> = {
   pending:      { label: '等待中', color: 'bg-gray-500' },
   pushing:      { label: '推送中', color: 'bg-blue-500' },
   downloading:  { label: '下载中', color: 'bg-cyan-500' },
-  installing:   { label: '安装中', color: 'bg-yellow-500' },
-  completed:    { label: '已完成', color: 'bg-emerald-500' },
+  installing:   { label: '安装中', color: 'bg-amber-500' },
+  completed:    { label: '已完成', color: 'bg-green-500' },
   failed:       { label: '失败',   color: 'bg-red-500' },
   cancelled:    { label: '已取消', color: 'bg-gray-400' },
 };

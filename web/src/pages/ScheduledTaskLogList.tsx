@@ -155,7 +155,7 @@ export default function ScheduledTaskLogList() {
                       </TableCell>
                       <TableCell>
                         {item.status === 'success' ? (
-                          <div className="flex items-center gap-1 text-emerald-500 text-xs">
+                          <div className="flex items-center gap-1 text-green-500 text-xs">
                             <CheckCircle2 className="h-3.5 w-3.5" />
                             成功
                           </div>
